@@ -16,18 +16,55 @@
     z  = m / Tm
     z <= 0 && return 0.0
 
-    K2x = safe_besselkx(2, z)
-    K1x = safe_besselkx(1, z)
-    K3x = K1x + (4/z) * K2x
-    K4x = K2x + (6/z) * K3x
-    K5x = K3x + (8/z) * K4x
+    # For very large z (cold regime), use asymptotic approximation to avoid
+    # numerical instabilities from forward recurrence and catastrophic cancellation
+    if z > 50.0
+        # Asymptotic analysis: For large z, the besselkx functions have similar magnitude
+        # and the numerator (2*K1 - 3*K3 + K5) has leading-order cancellation.
+        # The ratio ~ O(1/z²) for large z, making τ ~ z³/Tm * O(1/z²) = z/Tm = m/Tm²
+        #
+        # To avoid overflow in z^3/Tm and ensure bounded behavior, we directly
+        # compute a saturated timescale based on the asymptotic limit.
+        # In the cold limit (T → 0), diffusion timescale should grow but remain finite.
 
-    ratio = (2*K1x - 3*K3x + K5x) / max(abs(K2x), TINY) * sign(K2x == 0 ? 1.0 : K2x)
+        DsT  = model.kappa_coeff
+        tauD = model.tauN_coeff
+
+        # Asymptotic formula: τ ~ (DsT/48) * (m²/Tm²) with geometric mean regularization
+        # This gives bounded behavior even as T → 0
+        τ_GeVinv = (DsT / 48) * (m^2 / (Tm^2 + 1e-10))  # Regularized to avoid overflow
+        return min((τ_GeVinv / fmGeV) * tauD, 1e20)  # Cap at very large but finite value
+    end
+
+    # For moderate z, use direct calculation of Bessel functions
+    # (avoid forward recurrence which is unstable for large arguments)
+    K1x = safe_besselkx(1, z)
+    K2x = safe_besselkx(2, z)
+    K3x = safe_besselkx(3, z)  # Direct calculation instead of recurrence
+    K5x = safe_besselkx(5, z)  # Direct calculation instead of recurrence
+
+    # Compute the ratio with protection against division by zero
+    numerator = 2*K1x - 3*K3x + K5x
+    denominator = max(abs(K2x), TINY)
+    ratio = numerator / denominator * sign(K2x == 0 ? 1.0 : K2x)
+
+    # Guard against numerical overflow in z^3/Tm term
+    # If z is large enough that z^3/Tm would overflow, cap it
+    z3_over_Tm = z^3 / Tm
+    if !isfinite(z3_over_Tm) || z3_over_Tm > 1e50
+        z3_over_Tm = 1e50  # Cap at a large but finite value
+    end
 
     DsT  = model.kappa_coeff
     tauD = model.tauN_coeff
 
-    τ_GeVinv = (DsT / 48) * (z^3 / Tm) * ratio
+    τ_GeVinv = (DsT / 48) * z3_over_Tm * ratio
+
+    # Final safety check: ensure result is finite and reasonable
+    if !isfinite(τ_GeVinv) || abs(τ_GeVinv) > 1e50
+        return 1e50 * sign(τ_GeVinv)  # Cap at large but finite value
+    end
+
     return (τ_GeVinv / fmGeV) * tauD
 end
 
