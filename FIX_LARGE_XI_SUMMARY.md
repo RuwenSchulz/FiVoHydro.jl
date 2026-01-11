@@ -2,11 +2,39 @@
 
 ## Problem Description
 
-When `rmax` is increased beyond 15, the code encounters numerical instabilities related to large Xi (ξ = m/T) values in the diffusion relaxation calculation. This manifests as subtle errors that are not related to MOOD or halving, but specifically to the handling of the heavy-quark mass-to-temperature ratio.
+When `rmax` is increased beyond 15, the simulation develops **causality violations** (Sr/E > 1, i.e., superluminal velocities) that cause it to blow up. This is NOT directly a MOOD or dt-halving issue, but rather a **numerical instability in the diffusion relaxation** caused by large ξ (xi) = m/T values in cold outer regions.
 
-## Root Causes
+### User-Reported Symptoms:
+- With χ ≈ 1.0 (default causality constraint): **simulation blows up**
+- With χ = 0.8 (looser constraint): **runs but produces weird artifacts**
+- The simulation "wants" χ > 1 (trying to produce superluminal velocities - unphysical!)
 
-The issue was in `src/dissipation.jl:13-32` in the `diff_tauN` function:
+Note: ξ (xi) = m/T is the dimensionless mass-to-temperature ratio, NOT χ (chi) which is the causality constraint parameter.
+
+## Causality Crisis: How diff_tauN Causes Sr/E > 1
+
+The connection between the Bessel function issue and causality violations is:
+
+1. **Large rmax** → colder outer regions → T → T_MIN ≈ 1e-15 GeV
+2. **Large ξ = m/T** → m/T ≈ 1.5/1e-15 = 1.5×10¹⁵ in cold regions
+3. **Bessel instabilities in diff_tauN** → τ_n (diffusion timescale) becomes NaN/Inf/garbage
+4. **Wrong τ_n** → diffusion current ν_r relaxation fails
+5. **ν_r diverges** → unphysical charge transport
+6. **Primitive recovery inconsistency** → the system (D, Sr, E, ν_r) becomes over-constrained
+   - See `src/primrec.jl:51-52` where ν_r enters the conservation equations directly:
+   ```julia
+   F[1] = n*uτ + v*nur_phys - D        # Charge conservation
+   F[2] = (weff + piR_phys)*(uτ*ur) - Sr  # Momentum conservation
+   ```
+7. **Sr explodes** → momentum builds up unphysically
+8. **Sr/E > 1** → velocity v = Sr/E exceeds speed of light (causality violation!)
+9. **χ constraint violated** → `enforce_Sr_energy_constraint!` tries to clip Sr to χ*E
+   - If χ ≈ 1.0: clipping fails, simulation blows up
+   - If χ < 1.0: aggressive clipping creates artifacts
+
+## Root Causes in diff_tauN
+
+The numerical issue was in `src/dissipation.jl:13-32` in the `diff_tauN` function:
 
 ### 1. Forward Recurrence Instability (lines 21-23)
 ```julia
@@ -71,12 +99,30 @@ These guards prevent overflow even in edge cases.
 - **For large z (z > 50)**: Uses asymptotic approximation with bounded behavior, preventing overflow and ensuring physical behavior in cold regions.
 - **All regimes**: Multiple safety checks ensure finite, well-behaved results even in extreme cases.
 
-## Testing
+## Expected Impact of Fix
 
-The fix ensures that:
-1. Simulations with `rmax > 15` no longer encounter numerical instabilities from large Xi values
-2. The diffusion timescale τ_N remains finite and physically reasonable even in cold regions (T → T_MIN)
-3. No impact on regions with moderate or small z values (normal temperature regime)
+### What the Fix Should Solve:
+
+1. **τ_n stays finite and well-behaved** even for z = m/T > 50
+2. **ν_r relaxation works correctly** → no divergence of diffusion current
+3. **Primitive recovery remains consistent** → no over-constrained (D, Sr, E, ν_r) system
+4. **Sr stays bounded** → no momentum explosion
+5. **Causality maintained** → Sr/E < 1 without needing χ < 1
+6. **Simulation runs stably with χ ≈ 1.0** (default) even for rmax > 15
+7. **No weird artifacts** from aggressive momentum clipping
+
+### What Should Now Work:
+
+- ✅ Simulations with rmax = 20, 25, 30, ... should run stably
+- ✅ Default χ = 0.99999999999 should work without modification
+- ✅ No superluminal velocities in cold outer regions
+- ✅ Physically reasonable diffusion behavior everywhere
+
+### What's Unchanged:
+
+- Normal temperature regimes (z ≤ 50) use improved direct calculation but should give same results
+- Resolution dr ≈ 0.05 stays constant (Nr scales with rmax)
+- All other physics (viscosity, EOS, MOOD) unchanged
 
 ## Files Modified
 
