@@ -1,0 +1,2 @@
+# Julia allocation profiler output
+*.mem
