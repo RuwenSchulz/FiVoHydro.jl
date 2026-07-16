@@ -41,12 +41,21 @@ struct CurrentWorkspace1D
     q_old::Vector{Float64}
     nu_old::Vector{Float64}
     nu_slope::Vector{Float64}
+    # Self-consistent fugacity field (coupled α–ν mode): α recovered from the
+    # evolved charm density each step, its r-slope, and its previous-step value
+    # for ∂τα.  Unused when couple_alpha=false (background-α mode).
+    alpha::Vector{Float64}
+    alpha_old::Vector{Float64}
+    alpha_slope::Vector{Float64}
 end
 
 function CurrentWorkspace1D(grid::CurrentGrid1D)
     Nr = length(grid.r)
     return CurrentWorkspace1D(
         zeros(Float64, Nr + 1),
+        zeros(Float64, Nr),
+        zeros(Float64, Nr),
+        zeros(Float64, Nr),
         zeros(Float64, Nr),
         zeros(Float64, Nr),
         zeros(Float64, Nr),
@@ -200,6 +209,15 @@ end
 @inline function diff_tauN_bg(T::Float64, α::Float64, DsT::Float64, eos::LatticeHRGEOS)
     # Match Fluidum's `τ_diffusion_hadron(T, α, x::Heavy_Quark, y::HQdiffusion)`
     # with `tauD = 1` for the single-species Boltzmann approximation used here.
+    #
+    # τ_n = D_s I_31/(T P_0) is a RATIO of equilibrium moments, so the degeneracy must
+    # CANCEL: τ_n = D_s z K₃(z)/K₂(z), independent of g_hq.  Fluidum's hadron-sum form
+    # gets this for free because its numerator and its `normalization` both carry the
+    # per-species factors (and its pseudoscalar D mesons have Degeneracy=1).  The
+    # single-species port below divides by `_fluidum_single_hadron_normalization`, which
+    # DOES carry `eos.g_hq` (= 6) — so `tauq` must carry it too, otherwise τ_n comes out
+    # a factor g_hq too SMALL.  (2026-07-16: it did; τ_n was 6× short of the matched
+    # `LangevInMedium.tau_n_main3` at every T.  See DERIVATION_CHECK.md finding F2.)
     Tm = max(T, T_MIN)
     m = hq_mass(eos)
     z = m / Tm
@@ -212,7 +230,7 @@ end
     b5 = b3 + 8.0 / z * b4
     ex = exp(clamp(α - z, -700.0, 700.0))
 
-    tauq = (DsT / (96.0 * π^2 * Tm^3)) * m^5 * ex * (2.0 * b1 - 3.0 * b3 + b5)
+    tauq = eos.g_hq * (DsT / (96.0 * π^2 * Tm^3)) * m^5 * ex * (2.0 * b1 - 3.0 * b3 + b5)
     norm = _fluidum_single_hadron_normalization(Tm, α, eos)
     abs(norm) <= TINY && return 0.0
 
@@ -273,6 +291,18 @@ end
     return -κ / Tm
 end
 
+# Charm number density n(T,α) consistent with the diffusion coefficients above
+# (for the lattice HRG, n(T,α)=n_th(T)·e^α with n_th=_fluidum_single_hadron_normalization).
+@inline _charm_n_density(T::Float64, α::Float64, eos::LatticeHRGEOS) =
+    _fluidum_single_hadron_normalization(T, α, eos)
+@inline _charm_n_density(T::Float64, α::Float64, eos) = eos_Pne(T, α * T, eos)[2]
+
+# Invert n → α at fixed T:  α = log(n / n_th(T)).  Self-consistent with κ and τ_n.
+@inline function _alpha_from_n(n::Float64, T::Float64, eos)
+    n_th = _charm_n_density(T, 0.0, eos)
+    return log(max(n, 1e-12 * max(n_th, TINY)) / max(n_th, TINY))
+end
+
 function build_limited_slopes!(slopes::Vector{Float64}, u::Vector{Float64}, r::Vector{Float64})
     Nr = length(u)
     Nr == length(slopes) || error("slopes must have length $Nr")
@@ -301,6 +331,34 @@ end
 
 @inline function limited_upwind_gradient(u::Vector{Float64}, slopes::Vector{Float64}, r::Vector{Float64}, i::Int, vel::Float64)
     return slopes[i]
+end
+
+# Coupled α–ν mode: recover the fugacity field α from the evolved charm density
+# (n from q=r·Jτ and ν_r) on the fixed (T,u^r) background, and its limited r-slope.
+# ∂τα is taken as (α - α_old)/dt by the caller.  This closes the n↔α↔ν loop so the
+# diffusion current is driven by the self-consistent ∇α, not a frozen background α.
+function compute_alpha_field!(ws::CurrentWorkspace1D, q::Vector{Float64}, nu_r::Vector{Float64},
+                              τ::Float64, grid::CurrentGrid1D, bg::BackgroundFields;
+                              T_floor::Float64, T_freeze::Float64, eos)
+    Nr = length(grid.r)
+    @inbounds for i in 1:Nr
+        r = grid.r[i]
+        Tbg = T_bg(bg, τ, r)
+        if Tbg < T_freeze
+            # Frozen-out tail (no medium below T_fo): carry the last active α with
+            # zero gradient so it does not drive a spurious diffusion current.
+            ws.alpha[i] = i > 1 ? ws.alpha[i - 1] : 0.0
+            continue
+        end
+        T = max(Tbg, T_floor)
+        uτ, ur, _ = _u_from_ur(ur_bg(bg, τ, r))
+        Jτ = q[i] / max(r, 1e-12)
+        ντ = (uτ <= 0.0) ? 0.0 : (ur / uτ) * nu_r[i]
+        n  = (uτ <= 0.0) ? 0.0 : (Jτ - ντ) / uτ
+        ws.alpha[i] = _alpha_from_n(n, T, eos)
+    end
+    build_limited_slopes!(ws.alpha_slope, ws.alpha, grid.r)
+    return nothing
 end
 
 @inline upwind_flux(v::Real, uL::Real, uR::Real) = (v >= 0) ? v * uL : v * uR
@@ -403,31 +461,44 @@ function step_system_current_only!(
     DsT::Float64,
     T_floor::Float64,
     eos,
+    couple_alpha::Bool=false,
+    T_freeze::Float64=0.0,
 )
     build_q_flux!(ws.flux_q, q, nu_r, τ, grid, bg)
     transport_update_q!(q, τ, dt, grid, ws)
-    step_nur_expanded!(nu_r, τ, dt, grid, ws, bg; DsT=DsT, T_floor=T_floor, eos=eos)
+    # Coupled mode: refresh α from the just-updated charm density before the ν step,
+    # then advance α_old for the next step's ∂τα.
+    couple_alpha && compute_alpha_field!(ws, q, nu_r, τ, grid, bg; T_floor=T_floor, T_freeze=T_freeze, eos=eos)
+    step_nur_expanded!(nu_r, τ, dt, grid, ws, bg; DsT=DsT, T_floor=T_floor, eos=eos, couple_alpha=couple_alpha, T_freeze=T_freeze)
+    couple_alpha && (ws.alpha_old .= ws.alpha)
     enforce_regularity_bc!(q, nu_r, grid)
     return nothing
 end
 
-function step_nur_expanded!(nu_r::Vector{Float64}, τ::Float64, dt::Float64, grid::CurrentGrid1D, ws::CurrentWorkspace1D, bg::BackgroundFields; DsT::Float64, T_floor::Float64, eos)
+function step_nur_expanded!(nu_r::Vector{Float64}, τ::Float64, dt::Float64, grid::CurrentGrid1D, ws::CurrentWorkspace1D, bg::BackgroundFields; DsT::Float64, T_floor::Float64, eos, couple_alpha::Bool=false, T_freeze::Float64=0.0)
     Nr = length(grid.r)
     ws.nu_old .= nu_r
     build_limited_slopes!(ws.nu_slope, ws.nu_old, grid.r)
 
     @inbounds for i in 1:Nr
         r = grid.r[i]
+        # Below freeze-out the charm has decoupled: no thermal diffusion current.
+        if couple_alpha && T_bg(bg, τ, r) < T_freeze
+            nu_r[i] = 0.0
+            continue
+        end
         T = max(T_bg(bg, τ, r), T_floor)
-        α = alpha_bg(bg, τ, r)
+        # Coupled mode: α (and ∂rα, ∂τα) from the self-consistent evolved field;
+        # background mode: α frozen to the input background spline.
+        α = couple_alpha ? ws.alpha[i] : alpha_bg(bg, τ, r)
         μ = α * T
         nbg = bg.n_spline === nothing ? eos_Pne(T, μ, eos)[2] : _eval_spline_clamped(bg.n_spline, r, τ, bg.r_grid, bg.t_grid)
         κ = diff_kappa_bg(T, α, nbg, DsT, eos)
         τn = diff_tauN_bg(T, α, DsT, eos)
 
         uτ, ur, _ = _u_from_ur(ur_bg(bg, τ, r))
-        dtα = dt_alpha_bg(bg, τ, r)
-        drα = dr_alpha_bg(bg, τ, r)
+        dtα = couple_alpha ? (ws.alpha[i] - ws.alpha_old[i]) / max(dt, 1e-12) : dt_alpha_bg(bg, τ, r)
+        drα = couple_alpha ? ws.alpha_slope[i] : dr_alpha_bg(bg, τ, r)
         dtur = dt_ur_bg(bg, τ, r)
         drur = dr_ur_bg(bg, τ, r)
 
@@ -474,6 +545,8 @@ function solve_current_only(
     DsT::Float64,
     T_floor::Float64,
     eos,
+    couple_alpha::Bool=false,
+    T_freeze::Float64=0.0,
 )
     Nr = length(grid.r)
     length(q0) == Nr || error("q0 must have length $Nr")
@@ -485,6 +558,12 @@ function solve_current_only(
     it = 0
     next_dump = τ0
     ws = CurrentWorkspace1D(grid)
+
+    # Seed the coupled fugacity field from the IC so the first step's ∂τα is well defined.
+    if couple_alpha
+        compute_alpha_field!(ws, q, nu_r, τ0, grid, bg; T_floor=T_floor, T_freeze=T_freeze, eos=eos)
+        ws.alpha_old .= ws.alpha
+    end
 
     τs = Float64[τ]
     qs = Vector{Float64}[copy(q)]
@@ -501,7 +580,7 @@ function solve_current_only(
         end
 
         τ_eval = τ + Δτ
-        step_system_current_only!(q, nu_r, τ_eval, Δτ, grid, ws, bg; DsT=DsT, T_floor=T_floor, eos=eos)
+        step_system_current_only!(q, nu_r, τ_eval, Δτ, grid, ws, bg; DsT=DsT, T_floor=T_floor, eos=eos, couple_alpha=couple_alpha, T_freeze=T_freeze)
         τ = τ_eval
         it += 1
 
@@ -659,6 +738,8 @@ function run_current_background(; outdir::String,
     eos = LatticeHRGEOS(),
     run_label::String = "",
     splines_outdir::Union{Nothing,String} = nothing,
+    couple_alpha::Bool = false,
+    T_freeze::Float64 = 0.0,
 )
     _fname_float(x::Real; digits::Int=3) = replace(replace(@sprintf("%.*f", digits, Float64(x)), "." => "p"), "-" => "m")
     _fname_symbol(s::Symbol) = replace(String(s), ":" => "")
@@ -718,6 +799,8 @@ function run_current_background(; outdir::String,
         DsT=DsT,
         T_floor=T_floor,
         eos=eos,
+        couple_alpha=couple_alpha,
+        T_freeze=T_freeze,
     )
 
     for (τ, q, nu_r) in zip(τs[2:end], qs[2:end], nus[2:end])
@@ -757,6 +840,7 @@ function main()
     env_float(name::String, default::Float64) = haskey(ENV, name) ? parse(Float64, ENV[name]) : default
     env_int(name::String, default::Int) = haskey(ENV, name) ? parse(Int, ENV[name]) : default
     env_str(name::String, default::String) = haskey(ENV, name) ? String(ENV[name]) : default
+    env_bool(name::String, default::Bool) = haskey(ENV, name) ? (lowercase(strip(String(ENV[name]))) in ("1", "true", "yes", "on")) : default
 
     function env_maybe_float(name::String, default::Union{Nothing,Float64}=nothing)
         if !haskey(ENV, name)
@@ -795,6 +879,11 @@ function main()
     run_label = env_str("RUN_LABEL", "")
     splines_outdir_env = env_str("HYDRO_SPLINES_OUTDIR", "")
     splines_outdir = isempty(strip(splines_outdir_env)) ? nothing : normpath(splines_outdir_env)
+    # Coupled α–ν solve (default). Set COUPLE_ALPHA=0 to recover the legacy
+    # background-α (ν-only) mode where α is read frozen from the input.
+    couple_alpha = env_bool("COUPLE_ALPHA", true)
+    # Freeze-out temperature: below it the charm decouples (no diffusion current).
+    T_freeze = env_float("T_FREEZE", 0.156)
 
     run_current_background(
         outdir=outdir,
@@ -819,6 +908,8 @@ function main()
         eos=eos,
         run_label=run_label,
         splines_outdir=splines_outdir,
+        couple_alpha=couple_alpha,
+        T_freeze=T_freeze,
     )
 end
 

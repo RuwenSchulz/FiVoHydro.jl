@@ -4,9 +4,14 @@ using Test
 include(joinpath(@__DIR__, "..", "main.jl"))
 using .hydro
 
-# Load the current-only 2nd-moment module for targeted identity tests.
-include(joinpath(@__DIR__, "..", "main3.jl"))
-using .hydro_current_2nd_moment
+# Load the current-only 2nd-moment module for targeted identity tests — only if present.
+# (main3.jl was removed from the repo; guard the include so the suite still runs.)
+const _MAIN3 = joinpath(@__DIR__, "..", "main3.jl")
+const HAVE_2ND_MOMENT = isfile(_MAIN3)
+if HAVE_2ND_MOMENT
+    include(_MAIN3)
+    using .hydro_current_2nd_moment
+end
 
 @testset "FiVoHydro smoke" begin
     @testset "EOS finite" begin
@@ -212,6 +217,11 @@ using .hydro_current_2nd_moment
         @test true
     end
 
+    if !HAVE_2ND_MOMENT
+        @testset "Current-only 2nd-moment identities (skipped: main3.jl absent)" begin
+            @test_skip true
+        end
+    else
     @testset "Current-only 2nd-moment identities" begin
         # Build a tiny grid in the current-only module.
         grid_full = hydro_current_2nd_moment.make_grid(33; rmax=2.0, nghost=1)
@@ -273,6 +283,7 @@ using .hydro_current_2nd_moment
             @test maximum(abs.(q2 .- (q .* (1 .- dt/τ)))) < 1e-12
         end
     end
+    end  # if HAVE_2ND_MOMENT
 
     # Optional longer run (e.g. local stress testing):
     #   FIVOHYDRO_LONG_TESTS=1 julia --project=. -e 'using Pkg; Pkg.test()'
@@ -301,5 +312,27 @@ using .hydro_current_2nd_moment
                 @test true
             end
         end
+    end
+end
+
+# EOS thermodynamic-consistency unit tests (in-process; the `hydro` module is already loaded above).
+include(joinpath(@__DIR__, "test_eos_consistency.jl"))
+
+# Charm-solver regression tests run as ISOLATED subprocesses: each (re)builds its own solver
+# module (hydro_current_IS2 / density-frame flux via main2IS2.jl / main.jl), which would clash
+# with the in-process `hydro` module if `include`d here. Subprocesses keep them independent.
+let JLBIN = joinpath(Sys.BINDIR, Base.julia_exename()),
+    PROJ  = normpath(joinpath(@__DIR__, "..")),     # FiVoHydro.jl package dir (full dep tree)
+    long  = lowercase(get(ENV, "FIVOHYDRO_LONG_TESTS", "0")) in ("1", "true", "yes", "y")
+
+    regression = ["test_is2_drive.jl", "test_density_frame_flux.jl", "test_bdnk_causal.jl",
+                  "test_is2_causality.jl"]
+    long && push!(regression, "test_is2_stability.jl")   # heavier fresh IS2 solve
+
+    @testset "charm-solver regression (subprocess): $script" for script in regression
+        path = joinpath(@__DIR__, script)
+        @test isfile(path)
+        ok = success(run(ignorestatus(`$JLBIN --project=$PROJ $path`)))
+        @test ok
     end
 end

@@ -134,6 +134,42 @@ end
 end
 
 # ------------------------------------------------------------
+# Density-frame charge diffusion (parabolic flux)
+#
+# In charge_mode=:density_frame there is no auxiliary ν^r field: μ is fixed by the
+# on-slice charge density (the ν-less layout makes primitive recovery solve
+# n u^τ = J^τ), and diffusion enters as the first-order-in-time parabolic flux
+#
+#   J^r_D = -κ (u^τ)^2 ∂_r α ,     κ = diff_kappa = DsT n / T ,
+#
+# derived from the heavy-quark Fokker–Planck equation in
+# Tex/DensityFrame/df_fp_derivation.tex (Eq. dfflux).  We add τ J^r_D to the charge
+# row of the face-flux array (work.Fh[iDtau, i] is the flux through the face between
+# cells i and i+1), using a centred two-point gradient of α.  The cell-centred α, T,
+# μ, n and rapidity y are already filled by the rhs! primitive-recovery loop.
+# ------------------------------------------------------------
+function add_density_frame_charge_flux!(work::Work1D, grid, τ::Float64, model::IdealDiffViscModel)
+    L = layout(model)
+    ng = grid.nghost
+    Ntot = length(work.alpha)
+    i0 = ng + 1
+    iL = Ntot - ng
+    invdr = 1.0 / grid.dr
+    @inbounds for i in i0:iL
+        (work.ok[i] && work.ok[i+1]) || continue
+        dαdr = (work.alpha[i+1] - work.alpha[i]) * invdr
+        Tf  = 0.5 * (exp(work.yT[i]) + exp(work.yT[i+1]))
+        μf  = 0.5 * (work.mu[i]      + work.mu[i+1])
+        nf  = 0.5 * (work.n[i]       + work.n[i+1])
+        uτf = 0.5 * (cosh(work.y[i]) + cosh(work.y[i+1]))
+        κf  = diff_kappa(Tf, μf, nf, model)
+        JrD = -κf * uτf^2 * dαdr
+        work.Fh[L.iDtau, i] += τ * JrD
+    end
+    return nothing
+end
+
+# ------------------------------------------------------------
 # Diffusion / viscosity helpers (θ, grad α, smoothing)
 # ------------------------------------------------------------
 function compute_theta!(work::Work1D, grid, τ)
@@ -402,6 +438,10 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
     # Cache previous-step rapidity so we can approximate D0 u^r = ∂_τ u^r
     # during this relaxation substep.
     copyto!(work.y_prev, work.y)
+    # NB: work.alpha_prev is intentionally NOT refreshed here. It must hold the PREVIOUS timestep's α
+    # so the covariant drive's temporal piece ∂τα = (α − α_prev)/Δ is nonzero. Copying it at entry
+    # (as was done) made α_prev ≡ α ⇒ ∂τα ≡ 0 ⇒ ν^r ≈2× under-driven vs Fluidum. It is now stored at
+    # the END of the charm-diffusion block below.
 
     if !( (model.enable_diff && L.hasNur) || 
           (model.enable_shear && (L.hasPiR || L.hasPiEta)) || 
@@ -578,10 +618,18 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
             λNN = model.lambda_NN_factor * τn
 
             # Navier–Stokes target.
-            # :alpha -> thermodynamic driving:  ν_NS = -κ uτ^2 ∂r(μ/T)
+            # :alpha -> thermodynamic driving with the FULL covariant projector:
+            #            ν_NS = -κ ∇^⟨r⟩α = -κ [uτ² ∂rα + u^r u^τ ∂τα]
+            #          The temporal piece is part of Fluidum's covariant gradient and is NOT
+            #          negligible on a cooling background (∂τα ~ m|Ṫ|/T² ~ O(1)/fm); without it the
+            #          FiVo first-order current is ≈2× under-driven vs Fluidum's IS2 charm (Pb+Pb
+            #          hydro-comparison). Restores the BIGRUN-2 Fluidum↔FiVo agreement (3–10%).
             # :n     -> density-based form:    ν_NS = -D uτ^2 [∂r n - (∂n/∂T)|α ∂r T]
             νNS_raw = if drive === :alpha
-                -κ * (uτ^2) * work.gradAlpha[i]
+                αp = work.alpha_prev[i]
+                # Guard: skip ∂τα on the very first substep (alpha_prev unprimed: NaN/0.0).
+                dαdτ = (isfinite(αp) && αp != 0.0) ? safe_div(α - αp, Δ) : 0.0
+                -κ * ((uτ^2) * work.gradAlpha[i] + ur * uτ * dαdτ)
             else
                 dn_dr = work.n_tmp[i]
                 dT_dr = work.gradAlpha[i]
@@ -661,6 +709,10 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
                 U[L.iNur,i] = stored_from_phys(νphys)
             end
         end
+
+        # Persist this step's (smoothed) α so the NEXT step's covariant drive has a true
+        # temporal piece ∂τα = (α − α_prev)/Δ (restores ~Fluidum-level ν^r; see entry note).
+        copyto!(work.alpha_prev, work.alpha)
     end
 
     # ---- bulk + shear ----

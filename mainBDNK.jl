@@ -164,12 +164,13 @@ end
 # ============================================================================
 function compute_dt_bdnk(work, grid, τ, model;
                          CFL::Float64=0.2, CFLτ::Float64=0.05,
-                         ε_ν::Float64=0.0,
+                         ε_ν_factor::Symbol=:kappa,
+                         ε_ν_value::Float64=NaN,
                          diff_dt_coeff::Float64=0.02)
     ng = grid.nghost
     amax = 1e-30
     kmax = 0.0
-    DsT = model.kappa_coeff
+    explicit_ε = isfinite(ε_ν_value)
 
     @inbounds for i in (ng+1):(length(work.yT)-ng)
         work.ok[i] || continue
@@ -182,13 +183,26 @@ function compute_dt_bdnk(work, grid, τ, model;
         λm, λp = hydro.wavespeeds_from_prim(T, μ, ur, model.eos)
         a = max(abs(λm), abs(λp))
 
-        # BDNK signal speed: v_sig = √(κ / ε_ν)
-        # The charge sector wave has maximum phase velocity v_sig.
-        # For ε_ν = κ, v_sig = c = 1.
-        # Boost formula for diffusion wavespeed in lab frame:
+        # BDNK signal speed: v_sig = √(κ / ε_ν), evaluated with a SPATIALLY-LOCAL ε_ν.
+        # Freezing ε_ν from a single reference cell makes v_sig = √(κ(cell)/κ(i_ref)) > 1
+        # in every cell denser than i_ref (κ ∝ n/T varies by ~10^4 across the fireball) — an
+        # acausal CFL artifact (see Projects/FiVoBenchmark/bench_bdnk_causality.jl). Using the
+        # local ε_ν makes v_sig physically meaningful per cell:
+        #   :kappa    ⇒ ε_ν_local = κ(cell)         ⇒ v_sig = c   (minimal causal)
+        #   :is_match ⇒ ε_ν_local = χ τ_D (χ = n/T) ⇒ v_sig = √(κ/(χ τ_D))
+        κ = hydro.diff_kappa(T, μ, work.n[i], model)
         v = hydro.safe_div(ur, uτ)
-        if ε_ν > hydro.TINY
-            v_sig = sqrt(hydro.diff_kappa(T, μ, work.n[i], model) / ε_ν)
+        ε_local = if explicit_ε
+            ε_ν_value
+        elseif ε_ν_factor === :is_match
+            τ_D = hydro.diff_tauN(T, μ, model)
+            χ   = hydro.safe_div(work.n[i], T)
+            χ * τ_D
+        else            # :kappa (default) — minimal causal, ε_ν = κ ⇒ v_sig = c
+            κ
+        end
+        if ε_local > hydro.TINY
+            v_sig = sqrt(κ / ε_local)
             v_sig = min(v_sig, 0.999999)
             λp_bdnk = (v + v_sig) / (1 + v * v_sig + hydro.TINY)
             λm_bdnk = (v - v_sig) / (1 - v * v_sig + hydro.TINY)
@@ -199,7 +213,6 @@ function compute_dt_bdnk(work, grid, τ, model;
         end
 
         # Diffusion CFL: dt < diff_dt_coeff * dr² / (D u^τ²)
-        κ = hydro.diff_kappa(T, μ, work.n[i], model)
         kmax = max(kmax, κ * uτ^2)
 
         amax = max(amax, a)
@@ -362,7 +375,8 @@ function run_sim_bdnk(;
         # CFL including BDNK signal speed
         Δτ = compute_dt_bdnk(work, grid, τ, model;
                               CFL=CFL, CFLτ=CFLτ,
-                              ε_ν=ε_ν_use,
+                              ε_ν_factor=ε_ν_factor,
+                              ε_ν_value=ε_ν_value,
                               diff_dt_coeff=diff_dt_coeff)
         if τ + Δτ > τfinal
             Δτ = τfinal - τ

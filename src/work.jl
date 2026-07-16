@@ -71,11 +71,20 @@ mutable struct Work1D
     bad_tls::Vector{Bool}
     amax_tls::Vector{Float64}
     kmax_tls::Vector{Float64}
+
+    # Previous-substep charm fugacity α (analogous to y_prev) for the temporal part of the
+    # covariant Navier–Stokes drive ∇^⟨r⟩α = u_τ²∂rα + u^r u^τ ∂τα in the diffusion relaxation.
+    # This is part of Fluidum's covariant gradient projection — required for FiVo's first-order
+    # diffusion to match Fluidum's IS2 charm current (≈2× under-driven without the ∂τα term).
+    alpha_prev::Vector{Float64}
 end
 
 function make_work(U)
     Nvars, Ntot = size(U)
-    nt = Threads.nthreads()
+    # Cover the full thread-id range (default + interactive pools), since
+    # Threads.@threads may schedule onto the interactive thread (threadid() can
+    # exceed Threads.nthreads()).  Under-sizing here BoundsErrors the threaded loops.
+    nt = Threads.nthreads() + Threads.nthreads(:interactive)
     return Work1D(
         zeros(Ntot), zeros(Ntot), zeros(Ntot), zeros(Ntot), zeros(Ntot), zeros(Ntot),
         zeros(Ntot), zeros(Ntot), zeros(Ntot), falses(Ntot),
@@ -133,6 +142,7 @@ function make_work(U)
         fill(false, nt),
         fill(1e-30, nt),
         fill(0.0, nt),
+        fill(NaN, Ntot),   # alpha_prev — NaN marks "no previous substep yet" (∂τα term skipped then)
     )
 end
 

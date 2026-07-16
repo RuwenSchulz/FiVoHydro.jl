@@ -138,6 +138,14 @@ function build_q_flux_bdnk!(
                       κ_face * (vface * dtα_face + drα_face) -
                       σ_T * (vface * dt_lnT_face + dr_lnT_face) +
                       (σ_a / uτface) * (dtur_face + vface * drur_face)
+        elseif ε_ν_mode === :density_frame
+            # Density frame: μ is fixed from the on-slice density, so the comoving
+            # ∂_τα term is eliminated and only the spatial parabolic flux survives.
+            # Using J^r = v J^τ + ν^r/(u^τ)^2 with ν^r = -κ (u^τ)^2 ∂_rα this is
+            #   J^r = v J^τ − κ ∂_rα ,
+            # i.e. the legacy alpha-only flux with the ∂_τα piece dropped.
+            # See Tex/DensityFrame/df_fp_derivation.tex.
+            Jr_face = vface * Jtau_up - κ_face * drα_face
         else
             # Legacy 2-parameter mode: J^r = v(J^τ − κ ∂_τα) − κ ∂_rα
             Jr_face = vface * (Jtau_up - κ_face * dtα_face) - κ_face * drα_face
@@ -208,6 +216,10 @@ function step_nur_bdnk!(nu_r::Vector{Float64}, τ::Float64,
             -κ   * (ur * uτ * dtα    + uτ^2 * drα) -
              σ_T * (ur * uτ * dt_lnT + uτ^2 * dr_lnT) +
              σ_a * (uτ * dtur + ur * drur)
+        elseif ε_ν_mode === :density_frame
+            # Density frame: spatial gradient only (no comoving ∂_τα), no σ_T/σ_a.
+            #   ν^r = -κ (u^τ)^2 ∂_rα      (Tex/DensityFrame/df_fp_derivation.tex)
+            -κ * uτ^2 * drα
         else
             # Legacy 2-parameter ansatz:
             #   ν^r = (ε_ν − κ) u^r u^τ ∂_τα + (ε_ν u^r² − κ u^τ²) ∂_rα
@@ -531,7 +543,11 @@ function main()
     run_label  = env_str("RUN_LABEL", "")
 
     eps_nu_str = lowercase(env_str("EPS_NU", "kappa"))
-    ε_ν_mode = eps_nu_str == "is_match" ? :is_match : :kappa
+    ε_ν_mode =
+        eps_nu_str == "is_match"                       ? :is_match :
+        eps_nu_str == "fp_matched"                     ? :fp_matched :
+        eps_nu_str in ("density_frame", "df")          ? :density_frame :
+                                                         :kappa
 
     run_current_background_bdnk(
         outdir=outdir,

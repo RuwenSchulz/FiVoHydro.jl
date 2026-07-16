@@ -146,7 +146,22 @@ struct IdealDiffViscModel{EOS,LAY,PR,SH<:ShearViscosity,BU<:BulkViscosity}
     relax_advect_Pi::Bool
     relax_advect_pi::Bool
 
+    # Charge-sector closure:
+    #   :mis           -> Israel-Stewart relaxation of ν^r toward ν_NS (default)
+    #   :density_frame -> canonical density frame: μ fixed by the on-slice charge
+    #                     density (no auxiliary ν field; realized by a ν-less layout),
+    #                     diffusion added as a first-order-in-time parabolic flux
+    #                     J^r_D = -κ (u^τ)^2 ∂_r α in rhs!.  See
+    #                     Tex/DensityFrame/df_fp_derivation.tex.
+    charge_mode::Symbol
 end
 
+
+# Backward-compatible constructor: callers that predate the charge_mode field
+# (e.g. mainBDNK.jl, the benches, test/runtests.jl) pass the 39 fields up to
+# relax_advect_pi; default charge_mode to :mis for them.  The full 40-argument
+# inner constructor remains available and is used by main.jl.
+IdealDiffViscModel(eos, layout, primrec, rest::Vararg{Any,36}) =
+    IdealDiffViscModel(eos, layout, primrec, rest..., :mis)
 
 @inline layout(model::IdealDiffViscModel) = model.layout

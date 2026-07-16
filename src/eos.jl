@@ -248,6 +248,33 @@ end
 
 
 # -------------------------
+# Chiral-modified EOS wrapper (SoftPion two-way coupling).
+# Wraps any base EOS with a per-cell additive (ΔP, Δn, Δe) from the soft-pion
+# subtract-and-replace sector, precomputed by the coupled driver from the local chiral
+# field σ (held frozen during a hydro sub-step — operator splitting). Constructed cheaply
+# per cell, so it is thread-safe. With zero deltas it reduces EXACTLY to the base EOS, so
+# default behaviour of every production run is untouched (this is a new type + new methods
+# only; nothing dispatches here unless a ChiralModifiedEOS is explicitly passed). cs² and
+# hq_mass are inherited from the base: the soft-pion shift is small and localized below
+# T_pc, so the constant ΔP/Δe leave dP/dT (hence cs²) unchanged to leading order.
+# -------------------------
+struct ChiralModifiedEOS{B}
+    base::B
+    dP::Float64
+    dn::Float64
+    de::Float64
+end
+ChiralModifiedEOS(base) = ChiralModifiedEOS(base, 0.0, 0.0, 0.0)
+
+@inline hq_mass(eos::ChiralModifiedEOS) = hq_mass(eos.base)
+@inline eos_cs2(T::Float64, μ::Float64, eos::ChiralModifiedEOS) = eos_cs2(T, μ, eos.base)
+@inline function eos_Pne(T::Float64, μ::Float64, eos::ChiralModifiedEOS)
+    P, n, e = eos_Pne(T, μ, eos.base)
+    return P + eos.dP, n + eos.dn, e + eos.de
+end
+
+
+# -------------------------
 # Generic thermodynamic helper (OK to keep generic)
 # -------------------------
 @inline function eos_entropy(T::Float64, μ::Float64, n::Float64, e::Float64, P::Float64)
@@ -284,10 +311,16 @@ Base.@kwdef struct LatticeHRGEOS
     # If your HQ formulas are in GeV^4 and light is already fmGeV3-scaled,
     # set this true to multiply HQ (P,n,e) by fmGeV3 as well.
     hq_times_fmGeV3::Bool = true
+
+    # Canonical-ensemble suppression of the charm density, I₁(N/2)/I₀(N/2). Default = the
+    # hardcoded N=21.55 value; pass a per-system value (e.g. matching Fluidum's N_total) to make
+    # the charm EOS identical to Fluidum's for a given collision system.
+    canon_factor::Float64 = _LHRG_CCBAR_FACT
 end
 
 const _LHRG_CCBAR = 21.55
 const _LHRG_CCBAR_FACT = SpecialFunctions.besseli(1, _LHRG_CCBAR/2) / SpecialFunctions.besseli(0, _LHRG_CCBAR/2)
+canonical_factor(N::Real) = SpecialFunctions.besseli(1, N/2) / SpecialFunctions.besseli(0, N/2)
 
 @inline hq_mass(eos::LatticeHRGEOS) = eos.m_hq
 
@@ -438,7 +471,7 @@ end
     end
    
     # This factor is independent of (T, μ); cache it to avoid per-call besseli allocations.
-    A   = _LHRG_CCBAR_FACT*g * m^2 / (2π^2)
+    A   = eos.canon_factor*g * m^2 / (2π^2)
     K2x = SpecialFunctions.besselkx(2, x)
 
     z   = (μ - m) / T

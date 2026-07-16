@@ -220,6 +220,12 @@ function rhs!(dU, U, grid, τ, model::IdealDiffViscModel, work::Work1D;
         hlle_flux_lr_U!(work.Fh, i, U, i, i+1, primL, primR, eos, grid.rC[i], grid.rC[i+1], τ, model, tmpFL, tmpFR)
     end
 
+    # Density-frame charge sector: add the first-order parabolic diffusion flux
+    # J^r_D = -κ (u^τ)^2 ∂_r α to the (purely advective) HLLE charge flux.
+    if model.charge_mode === :density_frame && model.enable_diff
+        add_density_frame_charge_flux!(work, grid, τ, model)
+    end
+
     need_theta = false
     if L.hasNur   && model.advect_nur; need_theta = true; end
     if L.hasPi    && model.advect_Pi;  need_theta = true; end

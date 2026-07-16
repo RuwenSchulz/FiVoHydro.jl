@@ -500,6 +500,8 @@ function run_sim_ideal_diff_visc(; outdir::String,
                                 init_good_range::Bool=true,
                                 init_good_min_cells::Int=32,
                                 init_good_buffer_cells::Int=4,
+                                # charge-sector closure (:mis IS-relaxation, or :density_frame)
+                                charge_mode::Symbol = :mis,
                                 # charge diffusion
                                 enable_diff::Bool=true,
                                 DsT::Float64=5.24,
@@ -554,7 +556,14 @@ function run_sim_ideal_diff_visc(; outdir::String,
 
     grid = make_grid(Nr; rmax=rmax, nghost=nghost)
 
-    layout = StateLayout([:Dtau,:Sr,:E,:nur,:Pi,:piR,:piEta]; odd_syms=[:Sr,:nur])
+    # Density frame carries no auxiliary diffusion field: μ is fixed from the on-slice
+    # charge density (primitive recovery uses ν=0 because L.hasNur=false) and diffusion
+    # enters as a parabolic flux in rhs!.  All other modes keep the ν^r slot.
+    layout = if charge_mode === :density_frame
+        StateLayout([:Dtau,:Sr,:E,:Pi,:piR,:piEta]; odd_syms=[:Sr])
+    else
+        StateLayout([:Dtau,:Sr,:E,:nur,:Pi,:piR,:piEta]; odd_syms=[:Sr,:nur])
+    end
 
     shear_model = QGPViscosity(eta_over_s, tauShear_coeff)
     bulk_model  = (zeta_over_s == 0.0) ? ZeroBulkViscosity() : SimpleBulkViscosity(zeta_over_s, tauPi_coeff)
@@ -585,7 +594,9 @@ function run_sim_ideal_diff_visc(; outdir::String,
         Pi_clip_factor, pi_clip_factor,
         advect_Pi, advect_pi,
         # NEW
-        relax_advect_Pi, relax_advect_pi
+        relax_advect_Pi, relax_advect_pi,
+        # charge-sector closure (:mis | :density_frame)
+        charge_mode
     )
 
     U = zeros(length(layout.names), grid.Nr + 2*grid.nghost)
@@ -902,6 +913,8 @@ function main()
     kappa_coeff = haskey(ENV, "KAPPA_COEFF") ? env_maybe_float("KAPPA_COEFF", nothing) : diag_maybe_float("KAPPA_COEFF", nothing)
     diffusion_drive_str = lowercase(haskey(ENV, "DIFFUSION_DRIVE") ? env_str("DIFFUSION_DRIVE", "alpha") : diag_str("DIFFUSION_DRIVE", "alpha"))
     diffusion_drive = diffusion_drive_str == "n" ? :n : :alpha
+    charge_mode_str = lowercase(haskey(ENV, "CHARGE_MODE") ? env_str("CHARGE_MODE", "mis") : diag_str("CHARGE_MODE", "mis"))
+    charge_mode = charge_mode_str in ("density_frame", "densityframe", "df") ? :density_frame : :mis
     tauN_coeff = haskey(ENV, "TAU_N_COEFF") ? env_float("TAU_N_COEFF", 1.0) : diag_float("TAU_N_COEFF", 1.0)
     deltaN_factor = haskey(ENV, "DELTA_N_FACTOR") ? env_float("DELTA_N_FACTOR", 0.0) : diag_float("DELTA_N_FACTOR", 0.0)
     diff_dt_coeff = haskey(ENV, "DIFF_DT_COEFF") ? env_float("DIFF_DT_COEFF", 0.01) : diag_float("DIFF_DT_COEFF", 0.01)
@@ -988,6 +1001,7 @@ function main()
                             init_good_min_cells=init_good_min_cells,
                             init_good_buffer_cells=init_good_buffer_cells,
 
+                            charge_mode=charge_mode,
                             enable_diff=enable_diff,
                             DsT=DsT,
                             kappa_coeff=kappa_coeff,

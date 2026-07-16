@@ -720,7 +720,13 @@ end
 mutable struct IdealPrimRec
     work::Vector{PrimRecWork}
 end
-IdealPrimRec() = IdealPrimRec([PrimRecWork() for _ in 1:Threads.nthreads()])
+# Size per-thread scratch to the full thread-id range, not just the default pool:
+# Threads.@threads can run on the :interactive pool too, so threadid() may reach
+# nthreads(:default)+nthreads(:interactive).  Using only Threads.nthreads() (default
+# pool) under-sizes and triggers a BoundsError in the threaded primitive loops
+# whenever an interactive thread exists.
+_primrec_nslots() = Threads.nthreads() + Threads.nthreads(:interactive)
+IdealPrimRec() = IdealPrimRec([PrimRecWork() for _ in 1:_primrec_nslots()])
 
 @inline function cons_to_prim_col(U::AbstractMatrix, i::Int, r::Float64, τ::Float64, model::IdealDiffViscModel)
     L = model.layout
