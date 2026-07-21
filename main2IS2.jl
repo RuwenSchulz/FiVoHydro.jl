@@ -38,15 +38,19 @@ const IS2_USE_Q_RECOVERY = get(ENV, "FIVO_USE_Q_RECOVERY", "1") == "1"
 # default −1.0 was the ELLIPTIC/Hadamard branch (grid-refinement blows up faster as Nr↑).  Env-overridable
 # so the elliptic branch stays reproducible for the well-posedness scan.
 const IS2_CM_SIGN = parse(Float64, get(ENV, "FIVO_CM_SIGN", "+1.0"))
-# Second-moment τ_M/η_M carry the SAME degeneracy (÷g_hq) normalization as τ_n, so the kinetic ratio
-# τ_M/τ_n = ½·K4K2/K3² ≈ 0.55 (FP_Hydro_matching eq:tauM_Bessel, both bare) is preserved once τ_n is
-# degeneracy-weighted to match Fluidum. Set FIVO_IS2_TAUM_BARE=1 to use the (inconsistent) bare τ_M for
-# comparison. See transport_all.
-# τ_M/η_M convention. Since the 2026-07-16 τ_n fix (transport_all: τn is now BARE _tauN, no ÷g_hq),
-# BARE is the correct and consistent default — τ_M/τ_n must stay ≈0.55 (NR limit ½). Set
-# FIVO_IS2_TAUM_DEGENERACY=1 to restore the old ÷g_hq convention (only meaningful together with a
-# ÷g_hq τ_n; mixing the two breaks the kinetic ratio by 6× in either direction).
+# τ_M/η_M convention. τ_M and τ_n share the SAME normalization so the kinetic ratio τ_M/τ_n = ½K4K2/K3²
+# ≈ 0.55 (FP_Hydro_matching eq:tauM_Bessel) is preserved. The LP1 Pb+Pb PRODUCTION uses the
+# degeneracy-weighted (÷g_hq) convention for BOTH τ_n and τ_M so FiVo's relaxation times equal Fluidum's
+# second-moment τ_diffusion_hadron / tauM_deg exactly (cross-solver consistency) — is2_dropin sets
+# FIVO_IS2_TAUN_DEGENERACY=1 + FIVO_IS2_TAUM_DEGENERACY=1. The bare (single-particle) form is the
+# module default and is available via the flags off / FIVO_IS2_TAUM_BARE=1 for standalone use; keep
+# τ_n and τ_M in the SAME convention (mixing breaks the 0.55 ratio by g_hq=6).
 const IS2_TAUM_DEGENERACY = get(ENV, "FIVO_IS2_TAUM_DEGENERACY", "0") == "1"
+# FIVO_IS2_TAUN_DEGENERACY=1 divides τ_n by g_hq too, so FiVo's τ_n MATCHES Fluidum's second-moment
+# τ_diffusion_hadron EXACTLY (which carries the ÷normalization ∝ g_hq). Use TOGETHER with
+# FIVO_IS2_TAUM_DEGENERACY=1 (keeps τ_M/τ_n = ½K4K2/K3² ≈ 0.55) and FIVO_IS2_CAUSAL_COEFF=0 (no clamp,
+# so τ_n is exactly Fluidum's). This is the "match Fluidum's τ_n/τ_M" convention (operator, 2026-07-19).
+const IS2_TAUN_DEGENERACY = get(ENV, "FIVO_IS2_TAUN_DEGENERACY", "0") == "1"
 const IS2_ORIGIN_ODD_FIRST_ORDER_CELLS = parse(Int, get(ENV, "FIVO_ORIGIN_ODD_FIRST_ORDER_CELLS", "4"))
 const IS2_VACUUM_N_LO = parse(Float64, get(ENV, "FIVO_VACUUM_N_LO", "1e-6"))
 const IS2_VACUUM_N_HI = parse(Float64, get(ENV, "FIVO_VACUUM_N_HI", "1e-2"))
@@ -331,6 +335,13 @@ function transport_all(T::Float64, α::Float64, DsT_val::Float64, eos)
     #     (0.301468 fm) was exactly 1/6 of it, at every T: the bug's fingerprint.
     #     τ_M/η_M below MUST stay in the SAME convention (now bare too) or the kinetic ratio breaks. ---
     τn = _tauN(Tm, z, DsT_val, K1x, K2x)
+
+    # Optionally divide τ_n by the degeneracy g_hq so it MATCHES Fluidum's second-moment τ_diffusion_hadron
+    # (which carries ÷normalization ∝ g_hq). Off by default (bare τ_n is the physically-correct ratio-of-
+    # moments value ≡ diff_tauN_bg ≡ 15.55·DsT); on for the Fluidum-matched comparison convention.
+    if IS2_TAUN_DEGENERACY
+        τn /= transport_norm
+    end
 
     # Causality clamp (finding I-1): v_sig²=κ/(dn_dα·τn) must be ≤ 1. Where the grand-canonical-κ /
     # canonical-χ convention pushes it >1 (high T/α), raise τ_n to the causal floor κ/dn_dα. Leaves
