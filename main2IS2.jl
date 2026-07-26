@@ -53,7 +53,53 @@ const IS2_TAUM_DEGENERACY = get(ENV, "FIVO_IS2_TAUM_DEGENERACY", "0") == "1"
 const IS2_TAUN_DEGENERACY = get(ENV, "FIVO_IS2_TAUN_DEGENERACY", "0") == "1"
 const IS2_ORIGIN_ODD_FIRST_ORDER_CELLS = parse(Int, get(ENV, "FIVO_ORIGIN_ODD_FIRST_ORDER_CELLS", "4"))
 const IS2_VACUUM_N_LO = parse(Float64, get(ENV, "FIVO_VACUUM_N_LO", "1e-6"))
-const IS2_VACUUM_N_HI = parse(Float64, get(ENV, "FIVO_VACUUM_N_HI", "1e-2"))
+# 2026-07-26: PRODUCTION DEFAULT LOWERED 1e-2 → 2e-3.  The old 1e-2 damped every dU by 2-5× across the
+# whole freeze-out shell (measured w = 0.76-0.86 at r=7 fm, 0.18-0.45 at r=8, 0.02-0.17 at r=9), leaving
+# the shell charm ∫2πrτn dr|_{7..9fm} up to 12% below Fluidum on the identical background.  2e-3 is the
+# SMALLEST threshold at which the α=±200 clamp still never engages — below it the clamp binds at
+# r≈8.6 fm, i.e. inside the shell, not in harmless far vacuum (1e-3 → 25 cells, 5e-4 → 319 cells and
+# charm drift 8× worse).  Measured at 2e-3: shell 12% low → 1.1% low (linear τ=4) and 9% low → 0.0%
+# (linear τ=8), const 0.995/0.999/0.989, charm drift unchanged at 5.8e-5, zero clamped cells, zero
+# solver failures.  See Julia/Projects/LangevinPaper1/HydroFieldsDiagnostic/README.md for the full scan.
+# ⚠️ This CHANGES every FiVo charm result — all FiVo charm products must be re-solved and re-ingested.
+const IS2_VACUUM_N_HI = parse(Float64, get(ENV, "FIVO_VACUUM_N_HI", "2e-3"))
+# ── TEMPERATURE-GATED vacuum ramp (2026-07-26) ──────────────────────────────────────────────────
+# The density-gated ramp below (`_vacuum_weight`) cannot separate "vacuum" from "dilute but physical
+# fluid", because the charm freeze-out density and the regularization threshold overlap:
+#   • leaving the T=T_fo contour undamped needs n_hi ≲ 2.7e-4 (measured, min n on the linear contour);
+#   • keeping the α=±200 clamp from engaging needs n_hi ≳ 2e-3 (1e-3 already pins 25 cells).
+# Those windows miss each other by ~an order of magnitude, so at the shipped n_hi=1e-2 the ramp damps
+# every dU by 2-5x at r≈7-9 fm — i.e. across the entire freeze-out surface, where FiVo's density then
+# sits ~40% below Fluidum's.
+# ⚠️ TESTED AND IT DOES NOT WORK ON THE LP1 BACKGROUND — kept as a documented negative result, OFF by
+# default. The idea was that T discriminates where n cannot (fluid ⇔ T ≥ T_fo). It fails because this
+# background has a WARM FLAT TAIL: at τ=12, T = 0.146 at r=10 and 0.138 at r=12 while n has fallen to
+# 7e-4 and below; at r=15, T = 0.103 with n = 2e-27. So any T gate low enough to leave the freeze-out
+# contour alone also leaves the whole far tail undamped, exactly where dn_dα → 0 — and α runs straight
+# into the ±200 clamp (measured, linear/Nr=600/cM=0: T_HI=0.12 → 551 clamped cells, T_HI=0.08 → 428,
+# charm drift degraded 5.6e-5 → 4.6e-3). Density really is the conditioning parameter of the α
+# equation, so the regularizer has to be density-based; the practical fix is simply a SMALLER n_hi
+# (3e-3 gives 0 clamped cells, drift 5.6e-5, and r=8 density within 2% of Fluidum).
+# Set FIVO_VACUUM_T_HI > 0 to use the T ramp INSTEAD of the density ramp; the hard n_lo cutoff is kept
+# either way as a pure-vacuum backstop. T_HI=0 (default) reproduces the historical density-gated
+# behaviour bit-for-bit (verified: identical to 5 s.f. on the linear Nr=300 audit).
+const IS2_VACUUM_T_HI = parse(Float64, get(ENV, "FIVO_VACUUM_T_HI", "0.0"))
+const IS2_VACUUM_T_LO = parse(Float64, get(ENV, "FIVO_VACUUM_T_LO", "0.0"))
+
+"""
+Damping weight for the dilute/vacuum exterior, applied to every dU.  Returns 1 in the fluid.
+`n` is the local charm density, `T` the local (floored) temperature.
+"""
+@inline function _vacuum_weight(n::Float64, T::Float64)
+    n <= IS2_VACUUM_N_LO && return 0.0          # true vacuum backstop, both modes
+    if IS2_VACUUM_T_HI > 0.0
+        T >= IS2_VACUUM_T_HI && return 1.0
+        lo = IS2_VACUUM_T_LO
+        return T <= lo ? 0.0 : clamp((T - lo) / (IS2_VACUUM_T_HI - lo), 0.0, 1.0)
+    end
+    n >= IS2_VACUUM_N_HI && return 1.0
+    return clamp((n - IS2_VACUUM_N_LO) / (IS2_VACUUM_N_HI - IS2_VACUUM_N_LO), 0.0, 1.0)
+end
 # Cap on the characteristic speed used for the CFL Δτ estimate.
 # AUDIT CORRECTION (Projects/FiVoBenchmark/bench_is2_causality.jl, finding I-1): the eigenvalues
 # |λ|>1 of At⁻¹·Ax are NOT vacuum artifacts — they occur for PHYSICAL high-T/high-α states where the
@@ -328,8 +374,9 @@ function transport_all(T::Float64, α::Float64, DsT_val::Float64, eos)
     #     CANCEL. The old ÷g_hq copied Fluidum's τ_diffusion_hadron, which divides by a `normalization`
     #     ∝ Degeneracy — harmless there because its pseudoscalar D mesons have Degeneracy=1, but WRONG
     #     for FiVo's single-species charm quark with g_hq=6. Same bug fixed in main2.jl:224
-    #     (diff_tauN_bg) on 2026-07-16; main2IS2.jl is a separate module and was missed (it is untracked,
-    #     so it never appeared in the diff).
+    #     (diff_tauN_bg) on 2026-07-16; main2IS2.jl is a separate module and was missed in that pass.
+    #     (An earlier version of this comment claimed the file was untracked and so never showed in the
+    #     diff — false: main2IS2.jl IS tracked in the FiVoHydro submodule.)
     #     VERIFIED: bare _tauN ≡ the fixed HC.diff_tauN_bg to ratio 1.0000 at every (T,DsT,α) — e.g.
     #     T=0.156/DsT=0.11634 → 1.808805 fm, matching LangevInMedium's τ_n = 15.55·DsT. The old value
     #     (0.301468 fm) was exactly 1/6 of it, at every T: the bug's fingerprint.
@@ -688,7 +735,6 @@ function _second_moment_eigen_rhs!(
     piQr::Vector{Float64}, piQperp::Vector{Float64}, PiQ_field::Vector{Float64},
     τ::Float64, grid::IS2Grid1D, bg::IS2Background; DsT, T_floor::Float64, eos)
     Nr = length(grid.r)
-    n_lo = IS2_VACUUM_N_LO; n_hi = IS2_VACUUM_N_HI
     @inbounds for i in 2:(Nr-1)
         r = grid.r[i]
         T, ur, dtT, drT, drur, dtur = bg_fields(bg, τ, r)
@@ -728,7 +774,7 @@ function _second_moment_eigen_rhs!(
         d4 = -v*drP + SrcP
         d5 = -v*drB + SrcB
         # vacuum ramp (same as the first-moment fields)
-        w = n_local < n_hi ? clamp((n_local - n_lo)/(n_hi - n_lo), 0.0, 1.0) : 1.0
+        w = _vacuum_weight(n_local, T)
         dU[3][i] = d3*w; dU[4][i] = d4*w; dU[5][i] = d5*w
     end
     dU[3][1] = 0.0; dU[4][1] = 0.0; dU[5][1] = 0.0
@@ -896,18 +942,18 @@ function _compute_dUdt!(
             dU[4][i] = 0.0; dU[5][i] = 0.0
         end
 
-        # Smooth damping in regions where n is small (vacuum).
-        # At[1,1] = dn_dα ≈ n → 0 makes α ill-conditioned; cM-driven
-        # νr perturbations get amplified by 1/n, causing α blow-up.
-        # Use a smooth ramp: full evolution for n > n_hi, fully frozen for n < n_lo.
-        n_lo = IS2_VACUUM_N_LO; n_hi = IS2_VACUUM_N_HI
-        if n_local < n_hi
-            w = clamp((n_local - n_lo) / (n_hi - n_lo), 0.0, 1.0)
-            dU[1][i] *= w
-            dU[2][i] *= w
-            dU[3][i] *= w
-            dU[4][i] *= w
-            dU[5][i] *= w
+        # Smooth damping in the dilute/vacuum exterior.
+        # At[1,1] = dn_dα ≈ n → 0 makes α ill-conditioned; cM-driven νr perturbations get amplified
+        # by 1/n, causing α blow-up. Ramp the evolution off there — gated on T when
+        # FIVO_VACUUM_T_HI > 0, else on n (see _vacuum_weight for why T is the better discriminator).
+        # T is recomputed here exactly as _build_reduced_system! does; it returns n_local but not T.
+        w_vac = _vacuum_weight(n_local, max(bg_T(bg, τ, grid.r[i]), T_floor))
+        if w_vac < 1.0
+            dU[1][i] *= w_vac
+            dU[2][i] *= w_vac
+            dU[3][i] *= w_vac
+            dU[4][i] *= w_vac
+            dU[5][i] *= w_vac
         end
 
         if IS2_FREEZE_PDE_ALPHA
