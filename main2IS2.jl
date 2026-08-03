@@ -39,18 +39,29 @@ const IS2_USE_Q_RECOVERY = get(ENV, "FIVO_USE_Q_RECOVERY", "1") == "1"
 # so the elliptic branch stays reproducible for the well-posedness scan.
 const IS2_CM_SIGN = parse(Float64, get(ENV, "FIVO_CM_SIGN", "+1.0"))
 # τ_M/η_M convention. τ_M and τ_n share the SAME normalization so the kinetic ratio τ_M/τ_n = ½K4K2/K3²
-# ≈ 0.55 (FP_Hydro_matching eq:tauM_Bessel) is preserved. The LP1 Pb+Pb PRODUCTION uses the
-# degeneracy-weighted (÷g_hq) convention for BOTH τ_n and τ_M so FiVo's relaxation times equal Fluidum's
-# second-moment τ_diffusion_hadron / tauM_deg exactly (cross-solver consistency) — is2_dropin sets
-# FIVO_IS2_TAUN_DEGENERACY=1 + FIVO_IS2_TAUM_DEGENERACY=1. The bare (single-particle) form is the
-# module default and is available via the flags off / FIVO_IS2_TAUM_BARE=1 for standalone use; keep
-# τ_n and τ_M in the SAME convention (mixing breaks the 0.55 ratio by g_hq=6).
+# ≈ 0.55 (FP_Hydro_matching eq:tauM_Bessel) is preserved.
+#
+# ⚠ CORRECTED 2026-08-01 — this paragraph used to state that "the LP1 Pb+Pb PRODUCTION uses the
+# degeneracy-weighted (÷g_hq) convention ... is2_dropin sets FIVO_IS2_TAUN_DEGENERACY=1 +
+# FIVO_IS2_TAUM_DEGENERACY=1". That was true only until 2026-07-21, when Fluidum's τ_diffusion_hadron
+# itself went BARE (Eq. 30 of 2205.07692). NEITHER production path sets these flags any more:
+# LangevinPaper1/is2_dropin.jl says so explicitly ("default to 0 = bare, so we set nothing here") and
+# LangevinPaperOO/is2_dropin.jl sets nothing either, so BOTH systems evolve with the bare module
+# default and are mutually consistent. Verified by measurement, not by reading: the cached
+# tau_diff_spline reads ≈1.81 fm at T=T_fo in both projects (bare); an 0.30 fm reading means a
+# pre-07-21 stale cache, which is what O+O's diagnostic field turned out to be.
+# The flags remain for the convention study only. Keep τ_n and τ_M in the SAME convention (mixing
+# breaks the 0.55 ratio by g_hq=6).
 const IS2_TAUM_DEGENERACY = get(ENV, "FIVO_IS2_TAUM_DEGENERACY", "0") == "1"
 # FIVO_IS2_TAUN_DEGENERACY=1 divides τ_n by g_hq too, so FiVo's τ_n MATCHES Fluidum's second-moment
 # τ_diffusion_hadron EXACTLY (which carries the ÷normalization ∝ g_hq). Use TOGETHER with
 # FIVO_IS2_TAUM_DEGENERACY=1 (keeps τ_M/τ_n = ½K4K2/K3² ≈ 0.55) and FIVO_IS2_CAUSAL_COEFF=0 (no clamp,
 # so τ_n is exactly Fluidum's). This is the "match Fluidum's τ_n/τ_M" convention (operator, 2026-07-19).
 const IS2_TAUN_DEGENERACY = get(ENV, "FIVO_IS2_TAUN_DEGENERACY", "0") == "1"
+# Pure multiplier on τ_n, DIAGNOSTIC ONLY. DEFAULT 1.0 = production (byte-identical).
+# FIVO_IS2_TAUN_SCALE=0.25 → quarter the memory; →0 approaches the Navier–Stokes limit ν^r → ν_NS.
+# See the note at the τn use site for what this is for. Scales τ_n ONLY, so keep c_M = 0 when using it.
+const IS2_TAUN_SCALE = parse(Float64, get(ENV, "FIVO_IS2_TAUN_SCALE", "1.0"))
 const IS2_ORIGIN_ODD_FIRST_ORDER_CELLS = parse(Int, get(ENV, "FIVO_ORIGIN_ODD_FIRST_ORDER_CELLS", "4"))
 const IS2_VACUUM_N_LO = parse(Float64, get(ENV, "FIVO_VACUUM_N_LO", "1e-6"))
 # 2026-07-26: PRODUCTION DEFAULT LOWERED 1e-2 → 2e-3.  The old 1e-2 damped every dU by 2-5× across the
@@ -86,16 +97,61 @@ const IS2_VACUUM_N_HI = parse(Float64, get(ENV, "FIVO_VACUUM_N_HI", "2e-3"))
 const IS2_VACUUM_T_HI = parse(Float64, get(ENV, "FIVO_VACUUM_T_HI", "0.0"))
 const IS2_VACUUM_T_LO = parse(Float64, get(ENV, "FIVO_VACUUM_T_LO", "0.0"))
 
+# ── RELATIVE vacuum ramp (2026-08-02) ───────────────────────────────────────────────────────────
+# FIVO_VACUUM_N_REL_HI > 0 measures dilution against the CURRENT SLICE MAXIMUM n_ref(τ) instead of
+# against an absolute density, i.e. w ramps over n/n_ref ∈ [REL_LO, REL_HI].  DEFAULT 0 = off =
+# the absolute thresholds, byte-identical production.
+#
+# 🔴 WHY THIS EXISTS.  The absolute N_HI=2e-3 was calibrated on Pb+Pb, which carries ~24 charm quarks;
+# O+O carries 0.27.  Measured on the O+O freeze-out contour, the MEDIAN density is 1.2-1.4e-4 — below
+# the Pb+Pb contour MINIMUM of 2.7e-4 quoted above — so w ≈ 0.06 over the outer branch and ≈ 0.44-0.55
+# over the re-entrant shell, and by τ≈5 every cell inside r=5 fm is damped.  Since the weight
+# multiplies the WHOLE RHS including dU[2]=dν^r/dτ, that is a time dilation of the charm sector by
+# 1/w, i.e. an EFFECTIVE τ_n = τ_n/w: ≈27 fm on the outer branch and ≈4.2 fm on the inner shell
+# against the physical 1.81 fm.  Measured effect on ν^r at the freeze-out surface (identical solves,
+# only this threshold changed — `Projects/LangevinPaperOO/diagnose_vacuum_ramp.jl`):
+#   const  outer |ν^r/n| 0.028 vs 0.230 undamped (8× suppressed) | inner 0.168 vs 0.118 (1.4× inflated)
+#   linear outer 0.022 vs 0.639 (29× suppressed)                 | inner 0.261 vs 0.214 (1.2× inflated)
+# — the current is wrong in BOTH directions at once, which distorts the branch-to-branch SHAPE by
+# 12-29× and is what the λ-scan reads as "λ>0 outside, λ≈−1 on the re-entrant shell".
+#
+# A ratio is the right variable because the regularizer's actual job is to switch off the far
+# exterior where dn_dα → 0 *relative to the fluid*, and that notion is scale-free in both system size
+# and Bjorken dilution, neither of which an absolute density tracks.
+#
+# ⚠ NOT VALIDATED ON Pb+Pb YET.  Default stays off until a Pb+Pb solve confirms the α clamp still
+# never engages and the charm drift is unchanged.  See the T-gate above for a documented case of a
+# reasonable-looking reparametrization that failed on the Pb+Pb background.
+const IS2_VACUUM_N_REL_HI = parse(Float64, get(ENV, "FIVO_VACUUM_N_REL_HI", "0.0"))
+const IS2_VACUUM_N_REL_LO = parse(Float64, get(ENV, "FIVO_VACUUM_N_REL_LO", "1e-4"))
+# Slice reference density n_ref(τ), refreshed once per RHS evaluation at the top of _compute_dUdt!
+# (which also covers _second_moment_eigen_rhs!, called from inside it).
+const IS2_VACUUM_NREF = Ref(0.0)
+
+# Kinematic bound |nu^r| <= FIVO_IS2_NU_BOUND * n, enforced in _recover_alpha_from_q! (see there for
+# why that is the only place it matters). 0 = OFF = production, byte-identical. 1.0 is the exact
+# bound; a slightly smaller value (0.9) leaves margin against the recovery hitting its density floor.
+# This and the RELATIVE ramp above are two halves of ONE fix and should be evaluated together: the
+# absolute ramp is currently doing two unrelated jobs at once — masking this runaway AND damping the
+# physical freeze-out region — and only the second is a mis-calibration.
+const IS2_NU_BOUND = parse(Float64, get(ENV, "FIVO_IS2_NU_BOUND", "0.0"))
+
 """
 Damping weight for the dilute/vacuum exterior, applied to every dU.  Returns 1 in the fluid.
 `n` is the local charm density, `T` the local (floored) temperature.
 """
 @inline function _vacuum_weight(n::Float64, T::Float64)
-    n <= IS2_VACUUM_N_LO && return 0.0          # true vacuum backstop, both modes
+    n <= IS2_VACUUM_N_LO && return 0.0          # true vacuum backstop, ALL modes
     if IS2_VACUUM_T_HI > 0.0
         T >= IS2_VACUUM_T_HI && return 1.0
         lo = IS2_VACUUM_T_LO
         return T <= lo ? 0.0 : clamp((T - lo) / (IS2_VACUUM_T_HI - lo), 0.0, 1.0)
+    end
+    if IS2_VACUUM_N_REL_HI > 0.0 && IS2_VACUUM_NREF[] > 0.0
+        hi = IS2_VACUUM_N_REL_HI * IS2_VACUUM_NREF[]
+        lo = max(IS2_VACUUM_N_REL_LO * IS2_VACUUM_NREF[], IS2_VACUUM_N_LO)
+        n >= hi && return 1.0
+        return n <= lo ? 0.0 : clamp((n - lo) / (hi - lo), 0.0, 1.0)
     end
     n >= IS2_VACUUM_N_HI && return 1.0
     return clamp((n - IS2_VACUUM_N_LO) / (IS2_VACUUM_N_HI - IS2_VACUUM_N_LO), 0.0, 1.0)
@@ -390,6 +446,19 @@ function transport_all(T::Float64, α::Float64, DsT_val::Float64, eos)
         τn /= transport_norm
     end
 
+    # DIAGNOSTIC-ONLY multiplier on τ_n. DEFAULT 1.0 = production, byte-identical.
+    # Added 2026-08-02 to test whether the charm first moment carries too much MEMORY. The IS2 solve
+    # under-spreads the charm relative to the Langevin transport on the same background and the same
+    # u^r (⟨r⟩ ratio at freeze-out 0.956 const / 0.802 linear for O+O, 0.916 for Pb+Pb linear), and at
+    # late times the transport's charge-weighted diffusive drift tracks the INSTANTANEOUS ν_NS almost
+    # exactly (+0.038 vs +0.035 at τ=5.5, linear) while the IS2 current sits at −0.201 — a relic, since
+    # τ_n ≈ 1.9 fm exceeds the time left to freeze-out for the whole last third of the evolution.
+    # Scaling τ_n down interpolates toward the Navier–Stokes limit and tests that directly.
+    # ⚠ This scales τ_n ONLY. τ_M is left alone, which breaks the kinetic ratio τ_M/τ_n ≈ 0.55 — harmless
+    # while c_M = 0 (production), where the second moments are passive and never feed back into ν^r,
+    # but do NOT use this together with FIVO_IS2_USE_CM=1.
+    τn *= IS2_TAUN_SCALE
+
     # Causality clamp (finding I-1): v_sig²=κ/(dn_dα·τn) must be ≤ 1. Where the grand-canonical-κ /
     # canonical-χ convention pushes it >1 (high T/α), raise τ_n to the causal floor κ/dn_dα. Leaves
     # the subluminal majority unchanged. Disable with FIVO_IS2_CAUSAL_COEFF=0 (exact Fluidum τ_n).
@@ -484,6 +553,37 @@ end
         T = max(bg_T(bg, τ, r), T_floor)
         uτ, ur, _ = _u_from_ur(bg_ur(bg, τ, r))
         Jtau = q[i] / max(r, 1e-12)
+        # ── PHYSICAL BOUND ON THE CURRENT (FIVO_IS2_NU_BOUND, default 0 = off) ──────────────────
+        # nu^r/n is a VELOCITY, so |nu^r| <= n is a kinematic bound, and the IS2 system enforces
+        # none. It matters HERE and nowhere else: this line recovers n from the conserved J^tau as
+        # n = (J^tau - (u^r/u^tau) nu^r)/u^tau and floors it at 1e-300, so an oversized nu^r pushes
+        # the recovered density onto the floor and the "conserved" charge silently leaks.
+        # 🔴 That is a REAL defect the vacuum ramp was masking, not a cosmetic one. Relaxing the ramp
+        # on O+O exposes it immediately (linear law, dilute exterior): max|nu^r|/n = 2528 c with 395
+        # superluminal cells and 221 cells at J^tau < 0 at N_REL_HI=0.01, 7155 c / 822 / 213 at
+        # 0.001, against 0.411 c and ZERO violations at the production absolute threshold — and the
+        # resulting charm drift GROWS with resolution (+3.1% at Nr=300, +3.8% at 600, +5.6% at 1200),
+        # which is how you tell a genuine runaway from an under-resolution artifact.
+        # ✅ SOLVED EXACTLY, not iterated. The naive clamp |nu| <= f*n caps against the n implied by
+        # the PRE-clamp nu^r, so it undershoots and leaves residual violations (4 cells survived of
+        # 395 in the O+O linear run). But n depends on nu^r linearly, so the constraint closes:
+        #     n = (J - a nu)/u,   a = u^r/u^tau,  u = u^tau,   require |nu| <= f n
+        #   nu > 0:  nu u <= f(J - a nu)  =>  nu <= +f J / (u + f a)
+        #   nu < 0: -nu u <= f(J - a nu)  =>  nu >= -f J / (u - f a)
+        # an ASYMMETRIC window — the flow direction makes an outward current cheaper to sustain than
+        # an inward one, which the symmetric clamp got wrong. Exact in one step, no iteration.
+        # J^tau <= 0 means the cell is already inconsistent: fall back to nu^r = 0 (=> n = J/u).
+        if IS2_NU_BOUND > 0.0
+            f = IS2_NU_BOUND
+            a = ur / uτ
+            if Jtau <= 0.0
+                νr[i] = 0.0
+            else
+                hi = f * Jtau / (uτ + f * a)
+                lo = (uτ - f * a) > 0.0 ? -f * Jtau / (uτ - f * a) : -hi
+                νr[i] = clamp(νr[i], lo, hi)
+            end
+        end
         nu_tau = (ur / uτ) * νr[i]
         n_val = max((Jtau - nu_tau) / uτ, 1e-300)
         n_eq = max(eos_Pne(T, 0.0, eos)[2], 1e-300)
@@ -830,6 +930,19 @@ function _compute_dUdt!(
 )
     Nr = length(grid.r)
     max_charspeed = 0.0
+
+    # Slice reference density for the RELATIVE vacuum ramp. Computed once per RHS evaluation and
+    # stashed where _vacuum_weight can see it (it only receives (n,T)). Skipped entirely when the
+    # relative mode is off, so the absolute path costs nothing.
+    if IS2_VACUUM_N_REL_HI > 0.0
+        nref = 0.0
+        @inbounds for i in 1:Nr
+            T = max(bg_T(bg, τ, grid.r[i]), T_floor)
+            _, n_i, _ = eos_Pne(T, α[i] * T, eos)
+            isfinite(n_i) && n_i > nref && (nref = n_i)
+        end
+        IS2_VACUUM_NREF[] = nref
+    end
 
     build_limited_slopes!(slopes[1], α, grid.r)
     @inbounds for i in eachindex(grid.r)
