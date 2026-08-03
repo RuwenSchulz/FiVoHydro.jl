@@ -161,6 +161,39 @@ const IS2_NU_BOUND = parse(Float64, get(ENV, "FIVO_IS2_NU_BOUND", "0.0"))
 # Set FIVO_IS2_ALPHA_MIN=-200 to recover the pre-2026-08-03 behaviour exactly.
 const IS2_ALPHA_MIN = parse(Float64, get(ENV, "FIVO_IS2_ALPHA_MIN", "-20.0"))
 const IS2_ALPHA_MAX = parse(Float64, get(ENV, "FIVO_IS2_ALPHA_MAX", "200.0"))
+# Softness of the floor, in units of alpha. 0 = hard max() (the 2026-08-03 first form).
+const IS2_ALPHA_SOFT = parse(Float64, get(ENV, "FIVO_IS2_ALPHA_SOFT", "1.0"))
+
+"""
+    _alpha_floor(α) -> Float64
+
+Apply the fugacity floor SMOOTHLY, and the (genuine) overflow guard on the high side hard.
+
+A hard `max(α, α_min)` is a KINK: ∂α drops discontinuously to zero where it activates, which is
+the residual |∂α/∂r| ≈ 456 left after the first version of this fix (against 73 in a field that
+never touches the floor). Softplus removes it:
+
+    α = α_min + s·log1p(exp((α_raw − α_min)/s))
+
+C^∞ everywhere, → α_raw far above the floor, → α_min far below. It is TRANSPARENT where the physics
+lives: with s = 1 and α_min = −20, a physical α = −5 sits 15 above the floor and is shifted by
+log1p(e^−15) ≈ 3e−7. Only the dilute exterior, where α was running to −200 and meaning nothing, is
+affected at all.
+
+The high side stays a hard clamp: α_max = 200 is a true overflow guard, physical α never approaches
+it, and a soft cap there would perturb nothing while costing an exp() per cell.
+"""
+@inline function _alpha_floor(α::Float64)
+    isfinite(α) || return IS2_ALPHA_MIN
+    if IS2_ALPHA_SOFT > 0.0
+        Δ = (α - IS2_ALPHA_MIN) / IS2_ALPHA_SOFT
+        # log1p(exp(Δ)) overflows for large Δ and underflows harmlessly for very negative Δ
+        αf = IS2_ALPHA_MIN + IS2_ALPHA_SOFT * (Δ > 30.0 ? Δ : log1p(exp(Δ)))
+    else
+        αf = max(α, IS2_ALPHA_MIN)
+    end
+    return min(αf, IS2_ALPHA_MAX)
+end
 
 """
 Damping weight for the dilute/vacuum exterior, applied to every dU.  Returns 1 in the fluid.
@@ -617,7 +650,7 @@ end
         # or ADVANCES alpha must floor it -- flooring only the local `alpha_safe` copy used for
         # transport (as of the first attempt at this fix) leaves the EVOLVED and EXPORTED field
         # unbounded, which is what every downstream consumer actually reads.
-        α[i] = max(log(n_val / n_eq), IS2_ALPHA_MIN)
+        α[i] = _alpha_floor(log(n_val / n_eq))
     end
     return nothing
 end
@@ -693,7 +726,7 @@ function _build_reduced_system!(
     T, ur_val, dtT, drT, drur, dtur = bg_fields(bg, τ, r)
     T = max(T, T_floor)
 
-    α_safe = clamp(U[1], IS2_ALPHA_MIN, IS2_ALPHA_MAX)   # physical floor, not an overflow guard
+    α_safe = _alpha_floor(U[1])   # smooth physical floor, not an overflow guard
     # DsT may be a scalar or a T-dependent law (e.g. linear D_sT(T)); evaluate locally.
     DsT_val = DsT isa Function ? Float64(DsT(T)) : DsT
     tp = transport_all(T, α_safe, DsT_val, eos)
@@ -1278,7 +1311,7 @@ function step_IS2!(
     # Final RK4 update: U += dt/6 * (k1 + 2k2 + 2k3 + k4)
     c = dt / 6.0
     @inbounds for i in 1:Nr
-        α[i]         = clamp(α[i] + c * dU2[1][i], IS2_ALPHA_MIN, IS2_ALPHA_MAX)
+        α[i]         = _alpha_floor(α[i] + c * dU2[1][i])
         νr[i]        += c * dU2[2][i]
         piQr[i]      += c * dU2[3][i]
         piQperp[i]   += c * dU2[4][i]
@@ -1379,7 +1412,7 @@ function solve_IS2(
             r = grid.r[i]
             T_val, ur_val, dtT, drT, drur, dtur = bg_fields(bg, τ, r)
             T_val = max(T_val, T_floor)
-            α_safe = clamp(α[i], IS2_ALPHA_MIN, IS2_ALPHA_MAX)
+            α_safe = _alpha_floor(α[i])
             _set_state!(U_mid, α_safe, νr[i], piQr[i], piQperp[i], PiQ_field[i])
             ok_state, c_state, n_state = _build_reduced_system!(
                 B, src_term, At, Ax, src, U_mid, τ, r, bg;
@@ -1499,7 +1532,7 @@ function run_static_IS2_test(;
             T = max(bg_T(bg, τ0, r), T_floor)
             n_want = n_profile(r)
             _, n_eq0, _ = eos_Pne(T, 0.0, eos)
-            α[i] = n_eq0 > TINY ? max(log(max(n_want / n_eq0, TINY)), IS2_ALPHA_MIN) : 0.0
+            α[i] = n_eq0 > TINY ? _alpha_floor(log(max(n_want / n_eq0, TINY))) : 0.0
             νr[i] = nur_profile === nothing ? 0.0 : Float64(nur_profile(r))
         end
     end
