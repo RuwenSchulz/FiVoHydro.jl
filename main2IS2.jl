@@ -136,6 +136,32 @@ const IS2_VACUUM_NREF = Ref(0.0)
 # physical freeze-out region — and only the second is a mis-calibration.
 const IS2_NU_BOUND = parse(Float64, get(ENV, "FIVO_IS2_NU_BOUND", "0.0"))
 
+# ── THE FUGACITY FLOOR ───────────────────────────────────────────────────────────────────────────
+# 🔴 2026-08-03. Both α call sites used `clamp(α, -200.0, 200.0)`. That is an OVERFLOW GUARD, not a
+# physical bound: real charm fugacities on Σ run −1…−5, so ±200 sits ~40× outside anything the fluid
+# ever reaches. In the dilute exterior α → −∞ (α = log(n/n_th) diverges logarithmically as n → 0),
+# so the guard pinned whole shells at exactly −200 and the spline through that wall overshot to
+# −200.325 and worse.
+#
+# The damage is not in the hydro — it is in every CONSUMER, because −200.325 is a finite Float64 and
+# so participates silently in arithmetic:
+#   * differentiate it  → |∂α/∂r| ≈ 5000 vs 73 in a clean field (wrecked the O+O δ_cM figure)
+#   * exponentiate it   → e^−200 ≈ 0, so a masked cell is silently deleted from a Cooper–Frye integral
+#   * α_h + log(n/n_h)  → the −200 CANCELS, resurrecting a masked cell (blew the O+O moment floor up
+#                         by 6.5e12 and made "the floor" score 3× worse than plain hydro f₀)
+# Measured extent: O+O linear 548/156821 cells; Pb+Pb const 3436 and linear 6164 of 152071, reaching
+# −214 and −228 at the r=12 grid edge. This is solver-wide, not an O+O quirk.
+#
+# THE FIX IS A FLOOR, NOT A TIGHTER CLAMP. The distinction that matters is whether α REACHES the
+# bound continuously. Descending from −5, α passes through −20 smoothly and then flatlines: that is
+# a kink (C⁰, ∂α → 0), not a cliff. At −200 the evolution never gets there by physics — it lands
+# there as garbage, so the field jumps and the derivative explodes. e^−20 ≈ 2e-9 keeps n finite and
+# representable (no 1e-91 underflow) while being utterly negligible physically.
+#
+# Set FIVO_IS2_ALPHA_MIN=-200 to recover the pre-2026-08-03 behaviour exactly.
+const IS2_ALPHA_MIN = parse(Float64, get(ENV, "FIVO_IS2_ALPHA_MIN", "-20.0"))
+const IS2_ALPHA_MAX = parse(Float64, get(ENV, "FIVO_IS2_ALPHA_MAX", "200.0"))
+
 """
 Damping weight for the dilute/vacuum exterior, applied to every dU.  Returns 1 in the fluid.
 `n` is the local charm density, `T` the local (floored) temperature.
@@ -587,7 +613,11 @@ end
         nu_tau = (ur / uτ) * νr[i]
         n_val = max((Jtau - nu_tau) / uτ, 1e-300)
         n_eq = max(eos_Pne(T, 0.0, eos)[2], 1e-300)
-        α[i] = log(n_val / n_eq)
+        # FLOOR AT THE SOURCE. alpha = log(n/n_th) diverges as n -> 0, so every site that CREATES
+        # or ADVANCES alpha must floor it -- flooring only the local `alpha_safe` copy used for
+        # transport (as of the first attempt at this fix) leaves the EVOLVED and EXPORTED field
+        # unbounded, which is what every downstream consumer actually reads.
+        α[i] = max(log(n_val / n_eq), IS2_ALPHA_MIN)
     end
     return nothing
 end
@@ -663,7 +693,7 @@ function _build_reduced_system!(
     T, ur_val, dtT, drT, drur, dtur = bg_fields(bg, τ, r)
     T = max(T, T_floor)
 
-    α_safe = clamp(U[1], -200.0, 200.0)
+    α_safe = clamp(U[1], IS2_ALPHA_MIN, IS2_ALPHA_MAX)   # physical floor, not an overflow guard
     # DsT may be a scalar or a T-dependent law (e.g. linear D_sT(T)); evaluate locally.
     DsT_val = DsT isa Function ? Float64(DsT(T)) : DsT
     tp = transport_all(T, α_safe, DsT_val, eos)
@@ -1248,7 +1278,7 @@ function step_IS2!(
     # Final RK4 update: U += dt/6 * (k1 + 2k2 + 2k3 + k4)
     c = dt / 6.0
     @inbounds for i in 1:Nr
-        α[i]         += c * dU2[1][i]
+        α[i]         = clamp(α[i] + c * dU2[1][i], IS2_ALPHA_MIN, IS2_ALPHA_MAX)
         νr[i]        += c * dU2[2][i]
         piQr[i]      += c * dU2[3][i]
         piQperp[i]   += c * dU2[4][i]
@@ -1349,7 +1379,7 @@ function solve_IS2(
             r = grid.r[i]
             T_val, ur_val, dtT, drT, drur, dtur = bg_fields(bg, τ, r)
             T_val = max(T_val, T_floor)
-            α_safe = clamp(α[i], -200.0, 200.0)
+            α_safe = clamp(α[i], IS2_ALPHA_MIN, IS2_ALPHA_MAX)
             _set_state!(U_mid, α_safe, νr[i], piQr[i], piQperp[i], PiQ_field[i])
             ok_state, c_state, n_state = _build_reduced_system!(
                 B, src_term, At, Ax, src, U_mid, τ, r, bg;
@@ -1469,7 +1499,7 @@ function run_static_IS2_test(;
             T = max(bg_T(bg, τ0, r), T_floor)
             n_want = n_profile(r)
             _, n_eq0, _ = eos_Pne(T, 0.0, eos)
-            α[i] = n_eq0 > TINY ? log(max(n_want / n_eq0, TINY)) : 0.0
+            α[i] = n_eq0 > TINY ? max(log(max(n_want / n_eq0, TINY)), IS2_ALPHA_MIN) : 0.0
             νr[i] = nur_profile === nothing ? 0.0 : Float64(nur_profile(r))
         end
     end
