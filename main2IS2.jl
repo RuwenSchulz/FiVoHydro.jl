@@ -135,6 +135,60 @@ const IS2_VACUUM_NREF = Ref(0.0)
 # absolute ramp is currently doing two unrelated jobs at once — masking this runaway AND damping the
 # physical freeze-out region — and only the second is a mis-calibration.
 const IS2_NU_BOUND = parse(Float64, get(ENV, "FIVO_IS2_NU_BOUND", "0.0"))
+# Frame the bound is written in: "lab" reproduces the original |nu^r| <= f n, "lrf" the physical
+# |nu*_r| <= f n <=> |nu^r| <= f n u^tau. See the derivation at the clamp in _recover_alpha_from_q!.
+const IS2_NU_BOUND_LRF = lowercase(get(ENV, "FIVO_IS2_NU_BOUND_FRAME", "lab")) == "lrf"
+# How often the bound actually DID something. A bound that never binds is inert and the solution is
+# the solver's; a bound that binds on a large fraction of cell-steps is SHAPING the answer, and any
+# comparison against another code has to say so. `IS2_JTAU_NEG` counts the harsher branch: J^tau <= 0
+# means the recovered density would be negative, and the code responds by ZEROING the current there.
+const IS2_NU_BOUND_HITS = Ref(0)
+const IS2_JTAU_NEG      = Ref(0)
+
+# ── THE SAME BOUND, MADE UNREACHABLE INSTEAD OF ENFORCED (FIVO_NU_RAPIDITY) ─────────────────────
+# `IS2_NU_BOUND` above is a PROJECTION: it lets the RK step produce a superluminal nu^r and then puts
+# it back on the boundary. Exact, but it discards information every time it binds, and a state that
+# sits ON the bound is one the closure has no business being in.
+#
+# The alternative is a CHANGE OF INTEGRATION VARIABLE. nu = nu*_r/n = nu^r/(n u^tau) is a VELOCITY,
+# so the object with no kinematic bound is its RAPIDITY, phi = artanh(nu). Integrate phi and the
+# constraint |nu| < 1 is not enforced, it is unreachable: phi ranges over all of R and
+# nu = tanh(phi) can never leave (-1, 1) whatever the right-hand side does.
+#
+#   phi = artanh(nu^r / N),   N = n u^tau = n_eq e^alpha u^tau      (frozen at the step's start)
+#   dphi/dtau = (dnu^r/dtau) / N / (1 - (nu^r/N)^2)
+#   nu^r_new  = N tanh(phi_new)
+#
+# WHAT THIS IS AND IS NOT. It is not a clip: there is no branch, no threshold, no max/min, and tanh
+# is applied at every step whatever the state. It is not a new closure either -- phi is a smooth
+# bijection of nu on (-1,1), so RK4 in phi is the SAME fourth-order scheme in a different chart, and
+# it reduces to the current update to O(nu^2) since tanh(phi) = phi + O(phi^3). What it costs is that
+# N is held fixed across the step, so the bound realised is |nu| < N(tau)/N(tau+dt) = 1 + O(dt)
+# rather than exactly 1; each step re-anchors N, so there is no drift.
+#
+# 🔴 CELLS THAT ARE ALREADY OUTSIDE cannot be mapped (artanh is undefined), and those fall back to
+# the plain additive update rather than being silently moved. They are COUNTED in the diagnostics as
+# `nu_rapidity_fallbacks` -- a nonzero count means the run STARTED outside the bound, which is a
+# statement about the initial condition, not about this scheme.
+#
+# 🔴 MEASURED 2026-08-03 (Pb+Pb, `CMExperiment/diag_cm_subluminal.jl`) — DO NOT PROMOTE THIS AS IS.
+# It behaves exactly as designed and is still NOT SUFFICIENT on its own, for a reason worth writing
+# down: `_recover_alpha_from_q!` runs AFTER the step and re-derives n from the conserved J^tau, so a
+# bound imposed on nu^r during the RK stages is undone one line later when n moves. In the
+# regulator-free c_M = 0 linear run the chart changes nothing (max|nu| 1.9e15 either way, with 79755
+# fallback cell-steps = cells that were outside before the step began), because the runaway lives in
+# cells whose DENSITY has underflowed, not in cells whose current is too large -- and those carry
+# 0.00% of the emission. The existing `IS2_NU_BOUND` clamp, which acts inside the recovery, does
+# better on the contour (fraction of tau above |nu| = 0.8 falls 19.0% -> 4.1%) and still does not
+# remove it. The place for this chart, if it is ever wanted, is INSIDE the recovery beside that
+# clamp, where n and nu^r are determined together.
+# ✅ VERIFIED: flag off reproduces the shipped solution exactly (max|nu| 0.2213 / 0.0824 to 4 d.p.);
+# flag on with healthy physics is inert (identical numbers, 0 fallbacks). The real cure for the
+# superluminal current is c_M = D_s/T, which brings max|nu| to 0.074 (const) / 0.082 (linear)
+# REGULATOR-INDEPENDENTLY -- a bound is a safety net, not the fix.
+#
+# Default off; when off, not one arithmetic operation below changes.
+const IS2_NU_RAPIDITY = get(ENV, "FIVO_NU_RAPIDITY", "0") == "1"
 
 # ── THE FUGACITY FLOOR ───────────────────────────────────────────────────────────────────────────
 # 🔴 2026-08-03. Both α call sites used `clamp(α, -200.0, 200.0)`. That is an OVERFLOW GUARD, not a
@@ -403,9 +457,13 @@ mutable struct IS2Diagnostics
     eigen_failures::Int
     warned_linear::Int
     warned_eigen::Int
+    # cell-steps on which FIVO_NU_RAPIDITY could not chart the state because it was ALREADY outside
+    # |nu^r| < n u^tau; those fall back to the plain additive update. Nonzero ⇒ the run started
+    # outside the bound, which is a statement about the initial condition.
+    nu_rapidity_fallbacks::Int
 end
 
-IS2Diagnostics() = IS2Diagnostics(0, 0, 0, 0)
+IS2Diagnostics() = IS2Diagnostics(0, 0, 0, 0, 0)
 
 function _warn_or_fail_solver!(kind::Symbol, diagnostics::IS2Diagnostics, τ::Float64, r::Float64;
     message::AbstractString,
@@ -632,14 +690,28 @@ end
         # an ASYMMETRIC window — the flow direction makes an outward current cheaper to sustain than
         # an inward one, which the symmetric clamp got wrong. Exact in one step, no iteration.
         # J^tau <= 0 means the cell is already inconsistent: fall back to nu^r = 0 (=> n = J/u).
+        # 🔴 WHICH FRAME? (FIVO_IS2_NU_BOUND_FRAME, "lab" = the original, "lrf" = corrected.)
+        # The kinematic statement is that the charm drifts slower than light RELATIVE TO THE FLUID,
+        # i.e. |nu*_r| < n with nu*_r the REST-FRAME current. The lab component carries one more
+        # u^tau, nu^r = u^tau nu*_r, so the bound in lab variables is |nu^r| <= f n u^tau -- and the
+        # form below imposed |nu^r| <= f n, which is tighter by u^tau (a factor 1.37 on Sigma_fo at
+        # tau ~ 5, so f = 1 was really bounding the physical drift at 0.73 c). Solving the closed
+        # constraint again with the extra u^tau, using n u^tau = Jtau - a nu:
+        #   nu > 0:  nu <= f(J - a nu)      =>  nu <=  f J / (1 + f a)
+        #   nu < 0: -nu <= f(J - a nu)      =>  nu >= -f J / (1 - f a)
+        # i.e. exactly the old expressions with the leading u^tau removed from each denominator.
+        # Default stays "lab" so no existing run changes meaning without being asked.
         if IS2_NU_BOUND > 0.0
             f = IS2_NU_BOUND
             a = ur / uτ
             if Jtau <= 0.0
+                IS2_JTAU_NEG[] += 1
                 νr[i] = 0.0
             else
-                hi = f * Jtau / (uτ + f * a)
-                lo = (uτ - f * a) > 0.0 ? -f * Jtau / (uτ - f * a) : -hi
+                den = IS2_NU_BOUND_LRF ? 1.0 : uτ
+                hi = f * Jtau / (den + f * a)
+                lo = (den - f * a) > 0.0 ? -f * Jtau / (den - f * a) : -hi
+                (νr[i] > hi || νr[i] < lo) && (IS2_NU_BOUND_HITS[] += 1)
                 νr[i] = clamp(νr[i], lo, hi)
             end
         end
@@ -1249,6 +1321,38 @@ function step_IS2!(
               fail_on_eigen_failure=fail_on_eigen_failure,
               max_solver_warnings=max_solver_warnings)
 
+    # ── FIVO_NU_RAPIDITY: chart component 2 by its rapidity for the duration of this step ────────
+    # N is frozen at the step's start, so the map nu^r <-> phi is a fixed diffeomorphism of
+    # (-N, N) onto R throughout the four stages and RK4 stays fourth-order in phi. `φ0[i] = NaN`
+    # marks a cell that is already outside; those keep the plain additive update.
+    nurap = IS2_NU_RAPIDITY
+    N0   = nurap ? Vector{Float64}(undef, Nr) : Float64[]
+    φ0   = nurap ? Vector{Float64}(undef, Nr) : Float64[]
+    φacc = nurap ? Vector{Float64}(undef, Nr) : Float64[]
+    dφ   = nurap ? Vector{Float64}(undef, Nr) : Float64[]
+    if nurap
+        @inbounds for i in 1:Nr
+            T = max(bg_T(bg, τ, grid.r[i]), T_floor)
+            uτ, _, _ = _u_from_ur(bg_ur(bg, τ, grid.r[i]))
+            n_eq = max(eos_Pne(T, 0.0, eos)[2], 1e-300)
+            N0[i] = max(n_eq * exp(α[i]) * uτ, 1e-300)
+            x = νr[i] / N0[i]
+            if abs(x) < 1.0 - 1e-12
+                φ0[i] = atanh(x)
+            else
+                φ0[i] = NaN
+                diagnostics.nu_rapidity_fallbacks += 1
+            end
+        end
+    end
+    # dphi/dtau from dnu^r/dtau, evaluated at the state the slope was computed at (`νs`).
+    @inline nu_dphi(dν, νs, i) = (x = νs / N0[i]; g = 1.0 - x*x;
+                                  g <= 0.0 ? 0.0 : (dν / N0[i]) / g)
+    # phi advanced from the step's start by `h * s`, mapped back to nu^r. `s` is the stage slope for
+    # a predictor and the RK4 accumulation for the final update.
+    @inline nu_from_phi(h, s, i, νfallback) = isnan(φ0[i]) ? νfallback :
+                                              N0[i] * tanh(φ0[i] + h * s)
+
     # We accumulate the weighted sum in dU2: dU2 = (k1 + 2k2 + 2k3 + k4)/6
     # Using dU for each stage's evaluation and U_pred for the intermediate state.
 
@@ -1259,6 +1363,11 @@ function step_IS2!(
         dU2[1][i] = dU[1][i]; dU2[2][i] = dU[2][i]; dU2[3][i] = dU[3][i]
         dU2[4][i] = dU[4][i]; dU2[5][i] = dU[5][i]
     end
+    if nurap
+        @inbounds for i in 1:Nr
+            dφ[i] = nu_dphi(dU[2][i], νr[i], i); φacc[i] = dφ[i]
+        end
+    end
 
     # Stage 2: k2 = f(τ + dt/2, U + dt/2 * k1)
     @inbounds for i in 1:Nr
@@ -1268,12 +1377,22 @@ function step_IS2!(
         U_pred[4][i] = piQperp[i]   + 0.5*dt*dU[4][i]
         U_pred[5][i] = PiQ_field[i] + 0.5*dt*dU[5][i]
     end
+    if nurap
+        @inbounds for i in 1:Nr
+            U_pred[2][i] = nu_from_phi(0.5*dt, dφ[i], i, U_pred[2][i])
+        end
+    end
     max_cs = max(max_cs, _compute_dUdt!(dU, U_pred[1], U_pred[2], U_pred[3], U_pred[4], U_pred[5], odd_proxy_νr, odd_proxy_piQr, qperp_proxy,
                                          τ + 0.5*dt, grid, bg; rhs_kw...))
     # Accumulate: dU2 += 2*k2
     @inbounds for i in 1:Nr
         dU2[1][i] += 2*dU[1][i]; dU2[2][i] += 2*dU[2][i]; dU2[3][i] += 2*dU[3][i]
         dU2[4][i] += 2*dU[4][i]; dU2[5][i] += 2*dU[5][i]
+    end
+    if nurap                       # U_pred[2] still holds the state k2 was evaluated at
+        @inbounds for i in 1:Nr
+            dφ[i] = nu_dphi(dU[2][i], U_pred[2][i], i); φacc[i] += 2*dφ[i]
+        end
     end
 
     # Stage 3: k3 = f(τ + dt/2, U + dt/2 * k2)
@@ -1284,12 +1403,22 @@ function step_IS2!(
         U_pred[4][i] = piQperp[i]   + 0.5*dt*dU[4][i]
         U_pred[5][i] = PiQ_field[i] + 0.5*dt*dU[5][i]
     end
+    if nurap
+        @inbounds for i in 1:Nr
+            U_pred[2][i] = nu_from_phi(0.5*dt, dφ[i], i, U_pred[2][i])
+        end
+    end
     max_cs = max(max_cs, _compute_dUdt!(dU, U_pred[1], U_pred[2], U_pred[3], U_pred[4], U_pred[5], odd_proxy_νr, odd_proxy_piQr, qperp_proxy,
                                          τ + 0.5*dt, grid, bg; rhs_kw...))
     # Accumulate: dU2 += 2*k3
     @inbounds for i in 1:Nr
         dU2[1][i] += 2*dU[1][i]; dU2[2][i] += 2*dU[2][i]; dU2[3][i] += 2*dU[3][i]
         dU2[4][i] += 2*dU[4][i]; dU2[5][i] += 2*dU[5][i]
+    end
+    if nurap
+        @inbounds for i in 1:Nr
+            dφ[i] = nu_dphi(dU[2][i], U_pred[2][i], i); φacc[i] += 2*dφ[i]
+        end
     end
 
     # Stage 4: k4 = f(τ + dt, U + dt * k3)
@@ -1300,6 +1429,11 @@ function step_IS2!(
         U_pred[4][i] = piQperp[i]   + dt*dU[4][i]
         U_pred[5][i] = PiQ_field[i] + dt*dU[5][i]
     end
+    if nurap
+        @inbounds for i in 1:Nr
+            U_pred[2][i] = nu_from_phi(dt, dφ[i], i, U_pred[2][i])
+        end
+    end
     max_cs = max(max_cs, _compute_dUdt!(dU, U_pred[1], U_pred[2], U_pred[3], U_pred[4], U_pred[5], odd_proxy_νr, odd_proxy_piQr, qperp_proxy,
                                          τ + dt, grid, bg; rhs_kw...))
     # Accumulate: dU2 += k4
@@ -1307,12 +1441,18 @@ function step_IS2!(
         dU2[1][i] += dU[1][i]; dU2[2][i] += dU[2][i]; dU2[3][i] += dU[3][i]
         dU2[4][i] += dU[4][i]; dU2[5][i] += dU[5][i]
     end
+    if nurap
+        @inbounds for i in 1:Nr
+            φacc[i] += nu_dphi(dU[2][i], U_pred[2][i], i)
+        end
+    end
 
     # Final RK4 update: U += dt/6 * (k1 + 2k2 + 2k3 + k4)
     c = dt / 6.0
     @inbounds for i in 1:Nr
         α[i]         = _alpha_floor(α[i] + c * dU2[1][i])
-        νr[i]        += c * dU2[2][i]
+        νr[i]        = nurap ? nu_from_phi(c, φacc[i], i, νr[i] + c * dU2[2][i]) :
+                               νr[i] + c * dU2[2][i]
         piQr[i]      += c * dU2[3][i]
         piQperp[i]   += c * dU2[4][i]
         PiQ_field[i] += c * dU2[5][i]
@@ -1610,6 +1750,9 @@ function run_static_IS2_test(;
         "diagnostics" => Dict(
             "linear_failures" => diagnostics.linear_failures,
             "eigen_failures" => diagnostics.eigen_failures,
+            "nu_rapidity_fallbacks" => diagnostics.nu_rapidity_fallbacks,
+            "nu_bound_hits" => IS2_NU_BOUND_HITS[],
+            "jtau_nonpositive" => IS2_JTAU_NEG[],
         ),
     )
 
