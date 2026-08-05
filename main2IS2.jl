@@ -138,6 +138,18 @@ const IS2_NU_BOUND = parse(Float64, get(ENV, "FIVO_IS2_NU_BOUND", "0.0"))
 # Frame the bound is written in: "lab" reproduces the original |nu^r| <= f n, "lrf" the physical
 # |nu*_r| <= f n <=> |nu^r| <= f n u^tau. See the derivation at the clamp in _recover_alpha_from_q!.
 const IS2_NU_BOUND_LRF = lowercase(get(ENV, "FIVO_IS2_NU_BOUND_FRAME", "lab")) == "lrf"
+# Saturate smoothly (b*tanh(nu/b)) instead of clamping. Off = the exact projection, as before.
+const IS2_NU_BOUND_SMOOTH = get(ENV, "FIVO_IS2_NU_BOUND_SMOOTH", "0") == "1"
+# Knee: the fraction of the bound below which the smooth map is EXACTLY the identity. Must be < 1.
+const IS2_NU_BOUND_KNEE = parse(Float64, get(ENV, "FIVO_IS2_NU_BOUND_KNEE", "0.8"))
+# Floor J^tau at this fraction of the slice reference density instead of zeroing nu^r when the
+# transported charge comes out non-positive. 0 = historical (zero the current).
+const IS2_JTAU_FLOOR = parse(Float64, get(ENV, "FIVO_IS2_JTAU_FLOOR", "0.0"))
+# Project the (n, nu*_r) pair onto the admissible cone |nu*_r| <= f n instead of clamping a single
+# component. 0 = off. This is the covariant statement (N^mu timelike) and, unlike the clamp, it is
+# the identity ON the cone, so it engages without a kink. See _recover_alpha_from_q!.
+const IS2_CONE_PROJECT = parse(Float64, get(ENV, "FIVO_IS2_CONE_PROJECT", "0.0"))
+const IS2_CONE_HITS    = Ref(0)
 # How often the bound actually DID something. A bound that never binds is inert and the solution is
 # the solver's; a bound that binds on a large fraction of cell-steps is SHAPING the answer, and any
 # comparison against another code has to say so. `IS2_JTAU_NEG` counts the harsher branch: J^tau <= 0
@@ -706,17 +718,81 @@ end
             a = ur / uτ
             if Jtau <= 0.0
                 IS2_JTAU_NEG[] += 1
-                νr[i] = 0.0
-            else
+                # J^tau <= 0 means the transported charge in this cell is already inconsistent. The
+                # historical response is to ZERO the current, which is the most violent intervention
+                # in this routine -- far more so than the bound, which merely trims. With
+                # FIVO_IS2_JTAU_FLOOR > 0 the charge is instead floored at that fraction of the slice
+                # reference density and the current is left alone, so the cell rejoins the solution
+                # smoothly instead of having its dipole deleted. Default 0 = historical.
+                if IS2_JTAU_FLOOR > 0.0 && IS2_VACUUM_NREF[] > 0.0
+                    Jtau = IS2_JTAU_FLOOR * IS2_VACUUM_NREF[]
+                else
+                    νr[i] = 0.0
+                end
+            end
+            if Jtau > 0.0
                 den = IS2_NU_BOUND_LRF ? 1.0 : uτ
                 hi = f * Jtau / (den + f * a)
                 lo = (den - f * a) > 0.0 ? -f * Jtau / (den - f * a) : -hi
                 (νr[i] > hi || νr[i] < lo) && (IS2_NU_BOUND_HITS[] += 1)
-                νr[i] = clamp(νr[i], lo, hi)
+                # SOFT-KNEE SATURATION vs HARD CLAMP (FIVO_IS2_NU_BOUND_SMOOTH).
+                # `clamp` is C^0: a cell crossing the bound has its derivative replaced by zero, and
+                # the boundary of the bounded REGION shows up in the solution as a kink -- the narrow
+                # spikes at the entry and exit of the superluminal window.
+                # 🔴 THE OBVIOUS SMOOTHING IS WRONG. `x -> b tanh(x/b)` is smooth and saturates at the
+                # same b, but it is NOT the identity below the bound: it shaves x by (x/b)^2/3, and
+                # this map is applied to the STATE once per step, so over 3e4 steps that compounds
+                # into a global damping. Measured: it drives the linear-law current to 0.19 at tau=2
+                # and monotonically down to 0.07, i.e. it destroys the very current it was meant to
+                # leave alone. A saturation used as a state map must be EXACTLY the identity away
+                # from the bound.
+                # Hence a knee: identity for |nu| <= kappa*b, then a tanh that matches value AND
+                # derivative at the knee (tanh'(0) = 1) and saturates at b. C^1 everywhere, no
+                # compounding below the knee, and strictly |nu| < b above it.
+                if IS2_NU_BOUND_SMOOTH
+                    b = νr[i] >= 0.0 ? hi : -lo
+                    if b > 0.0
+                        κb = IS2_NU_BOUND_KNEE * b
+                        x  = abs(νr[i])
+                        x > κb && (νr[i] = sign(νr[i]) *
+                                   (κb + (b - κb) * tanh((x - κb) / max(b - κb, 1e-300))))
+                    end
+                else
+                    νr[i] = clamp(νr[i], lo, hi)
+                end
             end
         end
         nu_tau = (ur / uτ) * νr[i]
         n_val = max((Jtau - nu_tau) / uτ, 1e-300)
+
+        # ── CONE PROJECTION (FIVO_IS2_CONE_PROJECT) ─────────────────────────────────────────────
+        # Everything above repairs ONE COMPONENT and then recovers the other, which is why the
+        # regularized solution shows kinks where the repair switches on: nu^r is clamped at fixed
+        # J^tau, n is whatever falls out, and the pair jumps.
+        # The admissibility condition is not a statement about a component. The charge four-current
+        # N^mu = n u^mu + nu*_r ubar^mu must be TIMELIKE for a rest frame to exist at all, i.e.
+        #     N.N = n^2 - nu*^2 > 0   <=>   |nu*_r| < n,
+        # which is the same |nu| < 1 written as a property of the VECTOR. So repair the vector:
+        # if the pair (n, nu*) has left the cone, project it onto the ray |nu*| = f n, which changes
+        # BOTH entries, is the closest admissible state in the (n, nu*) plane, and is the IDENTITY on
+        # the boundary -- so the scheme switches on continuously instead of jumping.
+        #     d = (1, f)/sqrt(1+f^2),  (n', nu*') = ((n + f|nu*|)/(1+f^2)) (1, f sign nu*)
+        # At |nu*| = f n this returns (n, nu*) exactly, so there is no kink where it engages.
+        # It also subsumes the J^tau <= 0 branch: a non-positive charge with a finite current is just
+        # a point far outside the cone, and the projection returns a positive n rather than needing a
+        # special case that deletes the dipole.
+        if IS2_CONE_PROJECT > 0.0
+            f = IS2_CONE_PROJECT
+            νstar = νr[i] / uτ
+            if abs(νstar) > f * n_val
+                IS2_CONE_HITS[] += 1
+                np = (n_val + f * abs(νstar)) / (1.0 + f * f)
+                if np > 0.0
+                    n_val  = np
+                    νr[i]  = sign(νstar) * f * np * uτ
+                end
+            end
+        end
         n_eq = max(eos_Pne(T, 0.0, eos)[2], 1e-300)
         # FLOOR AT THE SOURCE. alpha = log(n/n_th) diverges as n -> 0, so every site that CREATES
         # or ADVANCES alpha must floor it -- flooring only the local `alpha_safe` copy used for
@@ -1753,6 +1829,10 @@ function run_static_IS2_test(;
             "nu_rapidity_fallbacks" => diagnostics.nu_rapidity_fallbacks,
             "nu_bound_hits" => IS2_NU_BOUND_HITS[],
             "jtau_nonpositive" => IS2_JTAU_NEG[],
+            # cell-steps on which the CONE PROJECTION actually moved the state. Zero means the
+            # solution never left the admissible cone and the projection is inert -- which is the
+            # difference between "the solver stayed physical" and "the cap held it there".
+            "cone_projections" => IS2_CONE_HITS[],
         ),
     )
 
