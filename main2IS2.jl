@@ -62,6 +62,15 @@ const IS2_TAUN_DEGENERACY = get(ENV, "FIVO_IS2_TAUN_DEGENERACY", "0") == "1"
 # FIVO_IS2_TAUN_SCALE=0.25 → quarter the memory; →0 approaches the Navier–Stokes limit ν^r → ν_NS.
 # See the note at the τn use site for what this is for. Scales τ_n ONLY, so keep c_M = 0 when using it.
 const IS2_TAUN_SCALE = parse(Float64, get(ENV, "FIVO_IS2_TAUN_SCALE", "1.0"))
+# FIVO_IS2_TAUPI_REL=1 gives the TRACE projection (Π_Q) its own relaxation time instead of reusing
+# τ_M.  The 14-moment ansatz fixes τ_π = τ_M from the rank-2 sector but says NOTHING about the trace:
+# its only scalar is removed by Landau matching, so the inertia coefficient of the Π_Q equation is a
+# 0/0 and the production code simply SETS τ_Π = τ_π = τ_M.  Restoring the minimal matching-orthogonal
+# scalar φ_Π = k² − 3I₃₁/I₁₀ gives (LangevinPaper1 main.tex, Eq. B22)
+#     τ_Π/τ_π = 5/2 − (3/2)·K₃²(z)/[K₂(z)K₄(z)] ,   z = M/T,
+# i.e. 1.14 at freeze-out (z=9.6) rising to ~1.27 in the hot core — the trace sector is SLOWER.
+# DEFAULT 0 = production (τ_Π ≡ τ_M, byte-identical).  DIAGNOSTIC: see is2_taupi_experiment.jl.
+const IS2_TAUPI_REL = get(ENV, "FIVO_IS2_TAUPI_REL", "0") == "1"
 const IS2_ORIGIN_ODD_FIRST_ORDER_CELLS = parse(Int, get(ENV, "FIVO_ORIGIN_ODD_FIRST_ORDER_CELLS", "4"))
 const IS2_VACUUM_N_LO = parse(Float64, get(ENV, "FIVO_VACUUM_N_LO", "1e-6"))
 # 2026-07-26: PRODUCTION DEFAULT LOWERED 1e-2 → 2e-3.  The old 1e-2 damped every dU by 2-5× across the
@@ -620,7 +629,26 @@ function transport_all(T::Float64, α::Float64, DsT_val::Float64, eos)
         ηM = 0.0
     end
 
-    return (n=n_val, dn_dα=dn_dα, dn_dT=dn_dT, κ=κ, τn=τn, τM=τM, ηM=ηM, Ds=Ds)
+    # --- τ_Π: relaxation time of the TRACE projection Π_Q. ---------------------------------------
+    #     Production (IS2_TAUPI_REL=false) sets τ_Π = τ_π = τ_M, which is what the 14-moment ansatz
+    #     leaves undetermined (its only scalar dies on Landau matching ⇒ the inertia coefficient of
+    #     the Π_Q equation is 0/0).  With the minimal matching-orthogonal scalar φ_Π = k² − 3I₃₁/I₁₀
+    #     restored, the ratio is closed-form (main.tex Eq. B22):
+    #         τ_Π/τ_π = 5/2 − (3/2)·K₃²/(K₂K₄),
+    #     ≥ 1 by log-convexity of K_n in its order, → 1 in the NR limit.  K₃/K₄ come from K₁/K₂ by the
+    #     recurrence K_{ν+1} = K_{ν-1} + (2ν/z)K_ν, so the exponential scaling of `besselkx` cancels
+    #     in the ratio.  Verified against the direct moment integrals (1.1365 at z=9.62).
+    τΠ = τM
+    if IS2_TAUPI_REL && z > 0.0 && abs(K2x) > 1e-30
+        K3x = K1x + (4 / z) * K2x
+        K4x = K2x + (6 / z) * K3x
+        d24 = K2x * K4x
+        if abs(d24) > 1e-300
+            τΠ = τM * max(1.0, 2.5 - 1.5 * K3x^2 / d24)
+        end
+    end
+
+    return (n=n_val, dn_dα=dn_dα, dn_dT=dn_dT, κ=κ, τn=τn, τM=τM, τΠ=τΠ, ηM=ηM, Ds=Ds)
 end
 
 @inline function _state_to_q!(q::Vector{Float64}, α::Vector{Float64}, νr::Vector{Float64}, τ::Float64,
@@ -1052,7 +1080,7 @@ function _second_moment_eigen_rhs!(
         T = max(T, T_floor)
         DsT_val = DsT isa Function ? Float64(DsT(T)) : DsT
         tp = transport_all(T, α[i], DsT_val, eos)
-        tauM = tp.τM; etaM = tp.ηM; n_local = tp.n
+        tauM = tp.τM; tauPi = tp.τΠ; etaM = tp.ηM; n_local = tp.n
         if !(tauM > 0.0) || !(r > 0.0)
             dU[3][i] = 0.0; dU[4][i] = 0.0; dU[5][i] = 0.0; continue
         end
@@ -1078,9 +1106,22 @@ function _second_moment_eigen_rhs!(
         SrcP = (-2*drnur*etaM*r*τ*ut4 + piP*(-3*r*τ + 4*τ*tauM*ur + 2*r*tauM*ut)*ut4
                 + 2*(drur*etaM*nur*r*τ*ur*ut2 + bPi*tauM*(2*τ*ur - r*ut)*ut4
                      + r*ut*(-(etaM*τ*ur*(dtnur - dtur*nur*ur + dtnur*ur^2)) + piR*tauM*ut4))) / (3*r*τ*tauM*ut5)
-        SrcB = (5*dtur*etaM*nur*r*τ + ut2*(2*bPi*τ*tauM*ur*ut
+        # Trace (Π_Q) row.  Every τ_M in the NUMERATOR cancels the 1/τ_M of the prefactor: those are the
+        # geometric (1/r, 1/τ) Christoffel couplings, which carry no relaxation time.  What is genuinely
+        # divided by τ_M is only the driving ζ_Q θ_(ν) (the 5·η_M terms, ζ_Q = 5/3 η_M) and the diagonal
+        # relaxation −Π_Q/(τ_M u^τ).  Splitting SrcB = A_B/τ + G_B therefore isolates exactly the rate,
+        # and IS2_TAUPI_REL swaps τ_M → τ_Π there and NOWHERE else.  The two branches below are
+        # algebraically identical at τ_Π = τ_M; production keeps the original single expression so it
+        # stays bit-for-bit unchanged.
+        SrcB = if IS2_TAUPI_REL
+            A_B = 5*dtur*etaM*nur*r*τ + ut2*(5*etaM*r*τ*(dtnur*ur + drnur*ut) - 3*bPi*r*τ*ut)
+            G_B = ut2*(2*bPi*τ*ur*ut - 2*piP*(r + r*ur^2 - τ*ur*ut) - 2*piR*r*ut2 + 2*bPi*r*ut2)
+            (A_B / tauPi + G_B) / (3*r*τ*ut4)
+        else
+            (5*dtur*etaM*nur*r*τ + ut2*(2*bPi*τ*tauM*ur*ut
                 + 5*etaM*r*τ*(dtnur*ur + drnur*ut) - 2*piP*tauM*(r + r*ur^2 - τ*ur*ut)
                 - 2*piR*r*tauM*ut2 + bPi*r*(-3*τ*ut + 2*tauM*ut2))) / (3*r*τ*tauM*ut4)
+        end
         d3 = -v*drR + SrcR
         d4 = -v*drP + SrcP
         d5 = -v*drB + SrcB
