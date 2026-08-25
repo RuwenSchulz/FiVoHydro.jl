@@ -11,7 +11,7 @@
 #
 # Viscous sector (shear + bulk) is retained.
 # ==============================================================================
-module hydro
+module hydro_bgonly   # renamed from `hydro` 2026-08-21: it shadowed main.jl's module when both were included
 
 using LinearAlgebra
 using Printf

@@ -10,7 +10,7 @@
 #   (c) keep the diffusion current sub-dominant:  max |ν^r| / (n u^τ) < 1,
 #   (d) conserve the charm number  ∫ 2πτ r J^τ dr  (advective + ν^r contribution).
 #
-# This is the unit-scale standalone version of /tmp/verify_is2_fresh.jl. It is heavier
+# This is the unit-scale standalone version of the 2026-06 fresh-IS2 verification script. It is heavier
 # than the pure-coefficient tests, so runtests.jl runs it only under FIVOHYDRO_LONG_TESTS=1.
 #   julia --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/test_is2_stability.jl
 # ==============================================================================

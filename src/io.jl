@@ -1,5 +1,5 @@
 # =========================
-# src/io.jl   (STEP 4)
+# src/io.jl — CSV/JLD2 snapshot writing, initial-profile interpolants, spline export
 # =========================
 
 using CSV

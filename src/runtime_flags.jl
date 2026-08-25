@@ -42,7 +42,7 @@ end
 This struct is intentionally the single source of truth for ENV-driven toggles.
 Use `hydro_flags()` to obtain a cached instance.
 
-See package README for a user-facing list of flags.
+See README.md §"Environment flags" and the generated ENV_FLAGS.md (tools/list_env_flags.jl) for the user-facing list.
 """
 Base.@kwdef struct HydroFlags
     # Admissibility / repair knobs

@@ -27,6 +27,8 @@
 # ==============================================================================
 
 using Test, Printf
+using SpecialFunctions
+using CSV, Tables   # CSV/Tables are declared deps; DelimitedFiles is NOT in Project.toml
 
 include(joinpath(@__DIR__, "..", "main.jl"))
 using .hydro
@@ -123,5 +125,77 @@ end
         kmax = κ * uτ^2
         @test kmax > 0.0
         @test isapprox(kmax, DST*n/T*FMGEV * uτ^2; rtol=2e-4)   # FMGEV = ħc here
+    end
+end
+
+# ==============================================================================
+# Regression gates added 2026-08-22 after two production DF bugs were found by an
+# end-to-end run (the unit test above passes with BOTH bugs present, because it
+# only exercises one call of the flux function on a hand-built state).
+# ==============================================================================
+
+@testset "eos_Pne is total down to T_MIN (no AmosException)" begin
+    # BUG 1: `eos_Pne` called SpecialFunctions.besselkx directly, which throws for
+    # x = m/T ≳ 1e10.  T_MIN = 1e-20 gives x = 1.5e20, so the primitive-recovery
+    # FAILURE FALLBACK in rhs.jl (`eos_Pne(T_MIN, 0.0, eos)`, rhs.jl:94) — the path
+    # that is supposed to keep a run alive — crashed the whole simulation instead.
+    # Reproduced on charge_mode=:density_frame at τ≈1.8; :mis never hit the fallback.
+    eos = hydro.ConformalHQEOS(g_eff=40.0, m_hq=1.5, g_hq=6.0)
+    for T in (hydro.T_MIN, 1e-18, 1e-12, 1e-10, 1e-8, 1e-4, 0.05, 0.15, 0.3, 0.6)
+        P, n, e = hydro.eos_Pne(T, 0.0, eos)
+        @test isfinite(P) && isfinite(n) && isfinite(e)
+        @test P >= 0.0 && n >= 0.0 && e >= 0.0
+    end
+    # the asymptotic branch must agree with Amos wherever Amos is valid
+    for ν in (1, 2), x in (1e2, 1e3, 1e4, 1e6, 1e9)
+        @test isapprox(hydro.safe_besselkx(ν, x),
+                       SpecialFunctions.besselkx(ν, x); rtol=1e-12)
+    end
+end
+
+@testset "DF parabolic dt cap uses D_eff = κ(uτ)²/(∂n/∂α)" begin
+    # BUG 2: the timestep cap used the BARE κ(u^τ)², but the density frame integrates
+    # J^r = -κ(u^τ)²∂_rα explicitly while evolving n, so the Von-Neumann diffusivity
+    # is D_eff = κ(u^τ)²/(∂n/∂α).  For a Boltzmann gas ∂n/∂α = n, so the old cap was
+    # too permissive by 1/n — ~80× at τ₀ and >1000× once the fireball cools.  The DF
+    # charge sector went unstable at τ≈1.78 and MANUFACTURED charge (45× in Δτ≈0.2).
+    model = make_df_model()
+    T, α = 0.25, 2.0
+    dndα = hydro.diff_dn_dalpha(T, α, model)
+    _, n, _ = hydro.eos_Pne(T, α*T, model.eos)
+    # Boltzmann: n ∝ e^α at fixed T  ⟹  ∂n/∂α = n
+    @test isapprox(dndα, n; rtol=1e-3)
+    @test dndα > 0.0
+
+    # and the cap must therefore be *tighter* than the bare-κ form by ≈1/n
+    uτ = cosh(0.4)
+    κ = hydro.diff_kappa(T, α*T, n, model)
+    Deff = κ*uτ^2/dndα
+    @test Deff > κ*uτ^2          # n < 1 here, so the true cap is strictly tighter
+    @test isapprox(Deff, κ*uτ^2/n; rtol=1e-3)
+end
+
+@testset "DF end-to-end charge conservation (catches the dt-cap instability)" begin
+    # The real guard: a short DF run through the window where the old cap blew up
+    # (τ≈1.78 with this IC).  With the bare-κ cap this gate fails hard — charge grew
+    # by a factor ~45 — while every unit test above still passed.
+    mktempdir() do out
+        hydro.run_sim_ideal_diff_visc(; outdir=out, Nr=200, rmax=15.0, nghost=3,
+            τ0=0.4, τfinal=2.2, charge_mode=:density_frame, enable_diff=true,
+            DsT=0.24, diffusion_drive=:alpha, enable_shear=false, enable_bulk=false,
+            dump_dt=0.3, init_csv=nothing, time_integrator=:ssprk2, log_every=10^9)
+
+        Q = Float64[]
+        for f in sort(readdir(out))
+            (startswith(f, "snapshot_tau_") && endswith(f, ".csv") &&
+             !endswith(f, "_meta.csv")) || continue
+            tbl = CSV.File(joinpath(out, f))
+            c(nm) = Float64.(getproperty(tbl, Symbol(nm)))
+            r, J, tv = c("r"), c("Jtau"), c("tau")
+            push!(Q, 2π*(r[2]-r[1])*sum(r .* J)*tv[1])
+        end
+        @test length(Q) >= 5
+        drift = maximum(abs.(Q .- Q[1])) / abs(Q[1])
+        @test drift < 1e-6        # observed 5e-10 fixed, 4.5e+01 with the old cap
     end
 end

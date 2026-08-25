@@ -26,6 +26,7 @@ include(joinpath(_SRC, "constants.jl"))
 include(joinpath(_SRC, "eos.jl"))
 include(joinpath(_SRC, "io.jl"))
 include(joinpath(_SRC, "is2_second_moment_builder.jl"))
+include(joinpath(_SRC, "hq_consistent_firstmoment.jl"))
 include(joinpath(_SRC, "logging_setup.jl"))
 
 const TWO_PI = 2π
@@ -146,6 +147,20 @@ const IS2_VACUUM_NREF = Ref(0.0)
 const IS2_NU_BOUND = parse(Float64, get(ENV, "FIVO_IS2_NU_BOUND", "0.0"))
 # Frame the bound is written in: "lab" reproduces the original |nu^r| <= f n, "lrf" the physical
 # |nu*_r| <= f n <=> |nu^r| <= f n u^tau. See the derivation at the clamp in _recover_alpha_from_q!.
+#
+# 🔴 THE DEFAULT IS THE *WRONG* FRAME ON PURPOSE, AND f DOES NOT TRANSFER BETWEEN FRAMES.
+# "lrf" is the physically correct statement (the charm drifts slower than light RELATIVE TO THE
+# FLUID). But the production f = 0.7 was calibrated EMPIRICALLY IN THE LAB FRAME against the
+# depletion runaway (dpm_recipes.jl: 0.9 -> 127 runaway cells, 0.7 -> 0), and "lrf" loosens the
+# same f by one u^tau (~1.37 on Sigma_fo). Measured A/B, O+O bulk, f = 0.7, Nr = 300, tau 0.4->5:
+#     lab: max|nu^r|/n = 0.700   J^tau<=0 in  579 cell-steps,  7 cells on the alpha floor
+#     lrf: max|nu^r|/n = 1.167   J^tau<=0 in 1884 cell-steps, 16 cells on the alpha floor
+# i.e. at fixed f the "correct" frame puts the lab-frame ratio ABOVE 1 -- it stops enforcing the
+# admissibility bound it exists for -- and re-opens the depletion feedback. So switching the frame
+# is not a free correction: it needs its own calibration (f_lrf ~ f_lab/u^tau ~ 0.5, which the
+# recipe's own scan already shows is runaway-free) and re-mints every O+O charm product.
+# Until that scan is run, "lab" stays the default and the paper must quote the LAB-frame bound
+# (f = 0.7 in lab variables is a physical drift bound of f/u^tau ~ 0.51 c, not 0.7 c).
 const IS2_NU_BOUND_LRF = lowercase(get(ENV, "FIVO_IS2_NU_BOUND_FRAME", "lab")) == "lrf"
 # Saturate smoothly (b*tanh(nu/b)) instead of clamping. Off = the exact projection, as before.
 const IS2_NU_BOUND_SMOOTH = get(ENV, "FIVO_IS2_NU_BOUND_SMOOTH", "0") == "1"
@@ -320,6 +335,26 @@ const IS2_DRIVE_ENABLE     = get(ENV, "FIVO_DRIVE_ENABLE", "1") == "1"          
 # "1.05" merely compensated the LatticeHRGEOS default canon_factor≈0.952 (hardcoded N=21.55).
 const HQ_KAPPA_RESONANCE_FACTOR = parse(Float64, get(ENV, "FIVO_KAPPA_RESONANCE_FACTOR", "1.0"))
 
+# ── THERMODYNAMICALLY CONSISTENT FIRST MOMENT (2026-08-25). DEFAULT OFF = byte-identical
+# production. Adds to src[2] the five source terms the homogeneous-rest-frame derivation of the
+# shipped ν^r row drops (pressure-gradient ∇⊥T channel, inertial τ_n n a^r, ν·∇u, τ_n ν D ln h,
+# geometric dilution τ_n ν(u^τ/τ+u^r/r)) — see src/hq_consistent_firstmoment.jl for the physics
+# and provenance (xAct: Julia/tools/derive_hq_consistent.wls 7/7; Fluidum twin gated to 1e-15).
+# A Ref so a driver can toggle per-solve without reloading the module
+# (runner: Tex/MaxEntHydro/run_fivo_consistent.jl; gates: Tex/MaxEntHydro/diag_fivo_consistent_gates.jl).
+const IS2_CONSISTENT_FM = Ref(get(ENV, "FIVO_HQ_CONSISTENT", "0") == "1")
+# ── Consistent 5-field (2026-08-25): with IS2_CONSISTENT_FM AND use_cM, the c_M back-coupling is
+# applied as an EXPLICIT SOURCE built from the complete abstract-route row (hq_cm_force — includes
+# the hoop-stress and τ-redshift geometric pieces the legacy basis-route matrix entries miss), and
+# the legacy matrix cM entries are zeroed. The ∂τζ part uses the previous RK stage's dU[3]/dU[5]
+# (scratch below) — FiVo's split computes dπ/dτ after dν/dτ, so an in-stage value does not exist;
+# O(dt) lag on one subdominant O(ur) term. Damped by n/(n+IS2_CM_NFLOOR) exactly like the Fluidum
+# twin (HQC_CM_NFLOOR, three orders below n_fo — <0.2% at the freeze-out surface). Flag off, or
+# use_cM=false: byte-identical production.
+const IS2_CM_NFLOOR = parse(Float64, get(ENV, "HQC_CM_NFLOOR", "1e-6"))
+const IS2_CM_DT3 = Ref(Float64[])     # lagged dU[3] (dπQr/dτ) for the consistent cM source
+const IS2_CM_DT5 = Ref(Float64[])     # lagged dU[5] (dΠQ/dτ)
+
 # ═══════════════════════ Grid ═══════════════════════════════════════
 struct IS2Grid1D
     r::Vector{Float64}
@@ -482,9 +517,10 @@ mutable struct IS2Diagnostics
     # |nu^r| < n u^tau; those fall back to the plain additive update. Nonzero ⇒ the run started
     # outside the bound, which is a statement about the initial condition.
     nu_rapidity_fallbacks::Int
+    steps::Int            # time steps taken by solve_IS2 (for the perf baseline / step-count diagnostics)
 end
 
-IS2Diagnostics() = IS2Diagnostics(0, 0, 0, 0, 0)
+IS2Diagnostics() = IS2Diagnostics(0, 0, 0, 0, 0, 0)
 
 function _warn_or_fail_solver!(kind::Symbol, diagnostics::IS2Diagnostics, τ::Float64, r::Float64;
     message::AbstractString,
@@ -898,6 +934,8 @@ function _build_reduced_system!(
     fail_on_linear_failure::Bool,
     fail_on_eigen_failure::Bool,
     max_solver_warnings::Int,
+    cm_dtz::Float64 = 0.0,           # ∂τ(πQr+ΠQ), stage-lagged (consistent 5-field only)
+    cm_drz::Float64 = 0.0,           # ∂r(πQr+ΠQ) from the MUSCL slopes (center calls only)
 )
     T, ur_val, dtT, drT, drur, dtur = bg_fields(bg, τ, r)
     T = max(T, T_floor)
@@ -913,6 +951,11 @@ function _build_reduced_system!(
     # assembles in LHS form (Aₜ∂_τU+Aₓ∂_rU=src), which flips the sign ⇒ the LHS coefficient is +c_M=+D_s/T,
     # i.e. IS2_CM_SIGN=+1 (the default, and the well-posed/hyperbolic branch — see CMExperiment audit).
     cM = (use_cM && T > T_cM_min) ? (IS2_CM_SIGN * tp.Ds / T) : 0.0
+    # Consistent 5-field: the cM force goes in as an explicit source (below) built from the
+    # COMPLETE abstract-route row; the legacy matrix cM entries (basis-route, missing the
+    # geometric hoop/redshift pieces) are zeroed. The CFL vM fold further down stays keyed
+    # on the physical cM either way.
+    cM_matrix = (IS2_CONSISTENT_FM[] && use_cM) ? 0.0 : cM
 
     r_safe = max(abs(r), 1e-6)
     r3 = r_safe^3
@@ -921,7 +964,24 @@ function _build_reduced_system!(
     build_IS2_system!(At, Ax, src,
         (α_safe, U[2], U[3], _piQperp_physical(U[4], r_safe), U[5]),
         τ, r, ur_val, T, dtT, drT, drur, dtur,
-        tp.n, tp.dn_dα, tp.dn_dT, κ_eff, τn_eff, tp.τM, tp.ηM, cM)
+        tp.n, tp.dn_dα, tp.dn_dT, κ_eff, τn_eff, tp.τM, tp.ηM, cM_matrix)
+
+    # Consistent first moment: the five derived source terms (flag, default off — see the
+    # IS2_CONSISTENT_FM const and src/hq_consistent_firstmoment.jl). Sources only: At/Ax and
+    # the CFL machinery are untouched, so flag-off is byte-identical production.
+    if IS2_CONSISTENT_FM[]
+        h_hqc, hp_hqc = hq_consistent_h_hp(T, DsT_val, τn_eff, eos)
+        src[2] += hq_consistent_extras(τ, r_safe, ur_val, T, dtT, drT, drur, dtur,
+                                       tp.n, tp.dn_dT, U[2], τn_eff, tp.Ds, h_hqc, hp_hqc)
+        # The consistent c_M back-coupling as an explicit source (complete row, geometric
+        # pieces included), Fluidum-parity vacuum damping n/(n+nfloor). Face calls carry
+        # cm_dtz = cm_drz = 0 and their src_face_term is never consumed.
+        if cM != 0.0
+            src[2] += cM * (tp.n / (tp.n + IS2_CM_NFLOOR)) *
+                      hq_cm_force(τ, r_safe, ur_val, dtur, drur,
+                                  U[3], _piQperp_physical(U[4], r_safe), U[5], cm_dtz, cm_drz)
+        end
+    end
 
     ax14 = Ax[1,4]; ax24 = Ax[2,4]; ax34 = Ax[3,4]; ax44 = Ax[4,4]; ax54 = Ax[5,4]
     @inbounds for row in 1:5
@@ -1097,7 +1157,7 @@ function _second_moment_eigen_rhs!(
         # bounded orthonormal eigenbasis (π_r,π_perp,Π_Q).  Derived by inverting Fluidum's 5×5 matrix
         # (At⁻¹(source − At[:,2]∂_τν − Ax∂_rX)) and splitting off the diagonal advection −v∂_rX (which
         # is exactly −uʳ/uᵗ for all three fields).  Verified to machine precision against the Fluidum
-        # matrix function in Julia/tools/verify_fivo_vs_fluidum_2nd_moment.wl (+ /tmp/rhs_compare.jl).
+        # matrix function in Julia/tools/verify_fivo_vs_fluidum_2nd_moment.wl (+ Julia/tools/rhs_compare.jl).
         # The Src terms carry the ν-gradient driving (2η_Q σ_(ν)) AND the π_perp/Π_Q cross-coupling in
         # the relaxation that the previous eigenbasis rederivation was missing.  c_M = 0.
         SrcR = (4*etaM*r*τ*(-(dtur*nur*ur^2) + ut*(drnur - drur*nur*ur + drnur*ur^2) + dtnur*(ur + ur^3))
@@ -1217,6 +1277,15 @@ function _compute_dUdt!(
     @inbounds for i in 1:Nr
         r = grid.r[i]
         _set_state!(U_mid, α[i], νr[i], piQr[i], piQperp[i], PiQ_field[i])
+        # consistent 5-field: ζ-gradient from the MUSCL slopes (πQr in its odd basis, like ν),
+        # ∂τζ from the previous stage's eigen-RHS (the lag documented at IS2_CM_DT3)
+        cm_dtz = 0.0; cm_drz = 0.0
+        if IS2_CONSISTENT_FM[] && use_cM
+            if length(IS2_CM_DT3[]) == Nr
+                cm_dtz = IS2_CM_DT3[][i] + IS2_CM_DT5[][i]
+            end
+            cm_drz = piQr[i] / max(r, 1e-12) + r * slopes[3][i] + slopes[5][i]
+        end
         ok_center, c_center, n_local = _build_reduced_system!(
             B, src_term, At, Ax, src, U_mid, τ, r, bg;
             DsT=DsT, T_floor=T_floor, T_cM_min=T_cM_min, eos=eos, use_cM=use_cM,
@@ -1224,6 +1293,7 @@ function _compute_dUdt!(
             fail_on_linear_failure=fail_on_linear_failure,
             fail_on_eigen_failure=fail_on_eigen_failure,
             max_solver_warnings=max_solver_warnings,
+            cm_dtz=cm_dtz, cm_drz=cm_drz,
         )
 
         if ok_center
@@ -1333,6 +1403,17 @@ function _compute_dUdt!(
     # is now complete and feeds the Navier–Stokes source.  Replaces the unstable /r⁴ matrix rows.
     _second_moment_eigen_rhs!(dU, α, νr, piQr, piQperp, PiQ_field, τ, grid, bg;
                               DsT=DsT, T_floor=T_floor, eos=eos)
+
+    # stash dπQr/dτ and dΠQ/dτ for the NEXT stage's consistent cM source (see IS2_CM_DT3).
+    # Deliberately taken BEFORE the Kreiss-Oliger block below: the ∂τζ of the abstract-route
+    # derivation is the PHYSICAL rate, and KO is a numerical regulator — the stored lag is the
+    # pre-dissipation value (audit note 2026-08-25).
+    if IS2_CONSISTENT_FM[] && use_cM
+        if length(IS2_CM_DT3[]) != Nr
+            IS2_CM_DT3[] = zeros(Nr); IS2_CM_DT5[] = zeros(Nr)
+        end
+        copyto!(IS2_CM_DT3[], dU[3]); copyto!(IS2_CM_DT5[], dU[5])
+    end
 
     # ── Kreiss-Oliger dissipation: damp grid-scale oscillations ──────
     # Adds -σ_KO/(16·dx) * (U[i-2] - 4U[i-1] + 6U[i] - 4U[i+1] + U[i+2])
@@ -1685,8 +1766,10 @@ function solve_IS2(
         end
     end
     prev_charspeed = max(prev_charspeed, 1e-8)
+    nsteps = 0
 
     while τ < τf - 1e-12
+        nsteps += 1
         # CFL from max characteristic speed (eigenvalue-based when cM≠0)
         dt_adv = CFL * minimum(grid.dr) / prev_charspeed
         dt_tau = CFLτ * τ
@@ -1731,6 +1814,7 @@ function solve_IS2(
         push!(PiQs, copy(PiQ_field))
     end
 
+    diagnostics.steps = nsteps
     return τs, αs, νrs, piQrs, piQperps, PiQs, diagnostics
 end
 
@@ -1820,6 +1904,11 @@ function run_static_IS2_test(;
 
     @info "Starting IS2 evolution" Nr=Nr rmax=rmax_use τ0=τ0 τfinal=τfinal DsT=DsT use_cM=use_cM T_cM_min=T_cM_min σ_KO=σ_KO
 
+    # Clear the consistent-cM lag scratch HERE so no driver has to remember: a stale
+    # same-length array from a previous solve would pass the reader's length check and feed
+    # the first stage an unrelated solve's ∂τζ (audit finding E2, 2026-08-25).
+    IS2_CM_DT3[] = Float64[]; IS2_CM_DT5[] = Float64[]
+
     τs, αs, νrs, piQrs, piQperps, PiQs, diagnostics = solve_IS2(
         grid, α, νr, piQr, piQperp, PiQ_field,
         τ0, τfinal, bg;
@@ -1865,6 +1954,7 @@ function run_static_IS2_test(;
         "piQperp" => piQperp_arr,
         "PiQ"     => PiQ_arr,
         "diagnostics" => Dict(
+            "steps" => diagnostics.steps,
             "linear_failures" => diagnostics.linear_failures,
             "eigen_failures" => diagnostics.eigen_failures,
             "nu_rapidity_fallbacks" => diagnostics.nu_rapidity_fallbacks,

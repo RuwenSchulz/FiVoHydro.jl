@@ -15,13 +15,14 @@ const FIGDIR = joinpath(@__DIR__, "..", "..", "MainFluidum", "Modes", "tex", "fi
 # ═══════════════════════════════════════════════════════════════════
 #  Load data
 # ═══════════════════════════════════════════════════════════════════
-println("Loading IS current-only data …")
-is = JLD2.load(joinpath(@__DIR__, "..",
-    "snapshots/current_only/hydro_currents_FiVo_current-only_tau0_0p400_tauf_15p000_rmax_25p000_nr_300_dst_0p240_20260324_193803.jld2"))
-
-println("Loading BDNK current-only data …")
-bdnk = JLD2.load(joinpath(@__DIR__, "..",
-    "snapshots/current_only_bdnk/hydro_currents_BDNK_current-only_tau0_0p400_tauf_15p000_rmax_25p000_nr_300_dst_0p240_20260326_160347.jld2"))
+# The two inputs are the hydro_currents_*.jld2 bundles written by main2.jl (IS) and main2BDNK.jl (BDNK).
+# They are NOT shipped with the repo (the snapshots/ they used to default to no longer exist):
+#   julia --project=Julia/FiVoHydro.jl scripts/plot_is_vs_bdnk.jl <is_bundle.jld2> <bdnk_bundle.jld2>
+length(ARGS) >= 2 || error("usage: plot_is_vs_bdnk.jl <IS hydro_currents_*.jld2> <BDNK hydro_currents_*.jld2>")
+isfile(ARGS[1]) || error("IS bundle not found: $(ARGS[1])")
+isfile(ARGS[2]) || error("BDNK bundle not found: $(ARGS[2])")
+println("Loading IS current-only data …");   is   = JLD2.load(ARGS[1])
+println("Loading BDNK current-only data …"); bdnk = JLD2.load(ARGS[2])
 
 r_is   = is["r"]
 tau_is = is["tau"]

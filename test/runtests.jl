@@ -4,13 +4,20 @@ using Test
 include(joinpath(@__DIR__, "..", "main.jl"))
 using .hydro
 
-# Load the current-only 2nd-moment module for targeted identity tests — only if present.
-# (main3.jl was removed from the repo; guard the include so the suite still runs.)
-const _MAIN3 = joinpath(@__DIR__, "..", "main3.jl")
-const HAVE_2ND_MOMENT = isfile(_MAIN3)
-if HAVE_2ND_MOMENT
-    include(_MAIN3)
-    using .hydro_current_2nd_moment
+"""Every snapshot_tau_*.csv in `outdir` parses and its T, e, ur columns are finite (T > 0)."""
+function _snapshots_finite(outdir)
+    files = filter(f -> startswith(f, "snapshot_tau_") && endswith(f, ".csv") && !endswith(f, "_meta.csv"), readdir(outdir))
+    isempty(files) && return false
+    for f in files
+        lines = readlines(joinpath(outdir, f)); length(lines) >= 2 || return false
+        hdr = split(strip(lines[1]), ','); iT = findfirst(==("T"), hdr); ie = findfirst(==("e"), hdr)
+        (iT === nothing || ie === nothing) && return false
+        for ln in lines[2:end]
+            v = split(ln, ','); T = parse(Float64, v[iT]); e = parse(Float64, v[ie])
+            (isfinite(T) && T > 0 && isfinite(e) && e >= 0) || return false
+        end
+    end
+    return true
 end
 
 @testset "FiVoHydro smoke" begin
@@ -188,8 +195,8 @@ end
                 time_integrator=:ssprk2,
                 postprocess=false,
             )
+            @test _snapshots_finite(outdir)
         end
-        @test true
     end
 
     @testset "Short dissipative run does not throw" begin
@@ -213,77 +220,37 @@ end
                 time_integrator=:ssprk2,
                 postprocess=false,
             )
-        end
-        @test true
-    end
-
-    if !HAVE_2ND_MOMENT
-        @testset "Current-only 2nd-moment identities (skipped: main3.jl absent)" begin
-            @test_skip true
-        end
-    else
-    @testset "Current-only 2nd-moment identities" begin
-        # Build a tiny grid in the current-only module.
-        grid_full = hydro_current_2nd_moment.make_grid(33; rmax=2.0, nghost=1)
-        grid = hydro_current_2nd_moment.CurrentGrid1D(grid_full)
-
-        # Minimal callable splines (functions) are sufficient for the module.
-        r_grid = collect(range(0.0, 2.0; length=4))
-        t_grid = collect(range(0.0, 2.0; length=4))
-
-        # Static background with ur=0 => v=0.
-        T_spl  = (r, t) -> 0.25
-        ur_spl = (r, t) -> 0.0
-        α_spl  = (r, t) -> 0.1
-        bg = hydro_current_2nd_moment.BackgroundFields(
-            r_grid, t_grid,
-            T_spl,
-            ur_spl,
-            nothing,
-            α_spl,
-            nothing,
-            nothing,
-            (r, t) -> 0.0,
-        )
-
-        τ = 1.0
-        q = @. grid.r * exp(-grid.r)
-        nu_r = @. 0.01 * sin(grid.r)
-        Phi = zeros(length(grid.r))
-
-        snap = hydro_current_2nd_moment.reconstruct_snapshot(q, nu_r, Phi, τ, grid, bg;
-            DsT=0.24,
-            T_floor=1e-6,
-            eos=hydro_current_2nd_moment.ConformalHQEOS(g_eff=40.0, m_hq=1.5, g_hq=6.0),
-        )
-
-        @testset "Jr identity" begin
-            @test all(isfinite, snap.Jtau)
-            @test all(isfinite, snap.Jr)
-            @test all(isfinite, snap.u_tau)
-            @test all(isfinite, snap.nu_r)
-            # With ur=0 => v=0 and u_tau=1, so Jr must equal nu_r/u_tau^2.
-            @test maximum(abs.(snap.Jr .- snap.nu_r ./ (snap.u_tau .^ 2))) < 1e-12
-        end
-
-        @testset "q conservation geometry" begin
-            # With ur=0 and DsT=0 => nu_r is driven to 0 and Jr=0,
-            # so the update reduces to q_new = q - dt*(q/τ).
-            ws = hydro_current_2nd_moment.CurrentWorkspace1D(grid)
-            q2 = copy(q)
-            nu2 = zeros(length(q2))
-            Phi2 = zeros(length(q2))
-            dt = 0.1
-
-            hydro_current_2nd_moment.step_current_imex!(q2, nu2, Phi2, τ, dt, grid, ws, bg;
-                DsT=0.0,
-                T_floor=1e-6,
-                eos=hydro_current_2nd_moment.ConformalHQEOS(g_eff=40.0, m_hq=1.5, g_hq=6.0),
-            )
-            @test maximum(abs.(q2 .- (q .* (1 .- dt/τ)))) < 1e-12
+            @test _snapshots_finite(outdir)
         end
     end
-    end  # if HAVE_2ND_MOMENT
+
+    @testset "relaxation_laws.jl reference vs the solver's backward-Euler update" begin
+        # src/relaxation_laws.jl is a REFERENCE (exact-exponential) integrator of the scalar MIS law
+        #   τn uτ dν/dτ + (1 + δθ) ν = ν_NS ;
+        # relax_dissipative! (src/dissipation.jl) discretises the SAME law with backward Euler,
+        #   ν_new = (A ν_old + ν_NS) / (A + 1 + δθ),  A = τn uτ / Δ   (no advection/λNN/Dy terms here).
+        # Neither calls the other; this test pins that they are two discretisations of one ODE.
+        law = hydro.DefaultRelaxationLaw()
+        νold, νNS, τn, δ, θ, uτ = 0.3, -0.05, 1.2, 0.4, 0.8, 1.3
+        g = 1 + δ*θ
+        νexact(Δ) = hydro.relaxation_update_nur_phys(law; νold_phys=νold, νNS_phys=νNS, adv_src=0.0,
+                                                     Δ=Δ, τn=τn, δ=δ, θ=θ, uτ=uτ)
+        νBE(Δ)    = ((τn*uτ/Δ)*νold + νNS) / ((τn*uτ/Δ) + g)
+        # same fixed point
+        @test isapprox(νexact(1e9), νNS/g; rtol=1e-9)
+        @test isapprox(νBE(1e9),    νNS/g; rtol=1e-6)     # BE fixed-point error ∝ A = τn uτ/Δ ≈ 1.6e-9
+        # first-order consistency: |BE − exact| = O(Δ²) per step ⇒ ratio of errors ≈ 4 when Δ halves
+        e(Δ) = abs(νBE(Δ) - νexact(Δ))
+        @test 3.5 < e(0.02)/e(0.01) < 4.5
+        @test e(0.01) < 1e-4
+        # the bulk hook is the exact exponential of τΠ uτ dΠ + Π = Π_NS
+        Πn = hydro.relaxation_update_Pi_phys(law; Πold_phys=0.2, ΠNS_phys=-0.1, adv_src=0.0, Δ=0.5, τΠ=1.0, θ=0.0, uτ=1.0)
+        @test isapprox(Πn, -0.1 + 0.3*exp(-0.5); rtol=1e-12)
+        # the shear hook relaxes both mixed components with one rate
+        πφ, πη = hydro.relaxation_update_pi_phi_eta_phys(law; πφ_old_phys=0.1, πη_old_phys=-0.2,
+                    πφNS_phys=0.0, πηNS_phys=0.0, adv_πφ=0.0, adv_πη=0.0, Δ=0.3, τπ=0.6, δπ=0.0, θ=0.0, uτ=1.0)
+        @test isapprox(πφ, 0.1*exp(-0.5); rtol=1e-12) && isapprox(πη, -0.2*exp(-0.5); rtol=1e-12)
+    end
 
     # Optional longer run (e.g. local stress testing):
     #   FIVOHYDRO_LONG_TESTS=1 julia --project=. -e 'using Pkg; Pkg.test()'
@@ -308,8 +275,8 @@ end
                         zeta_over_s=0.083,
                         time_integrator=:ssprk2,
                     )
+                    @test _snapshots_finite(outdir)
                 end
-                @test true
             end
         end
     end
@@ -326,7 +293,7 @@ let JLBIN = joinpath(Sys.BINDIR, Base.julia_exename()),
     long  = lowercase(get(ENV, "FIVOHYDRO_LONG_TESTS", "0")) in ("1", "true", "yes", "y")
 
     regression = ["test_is2_drive.jl", "test_density_frame_flux.jl", "test_bdnk_causal.jl",
-                  "test_is2_causality.jl"]
+                  "test_is2_causality.jl", "test_m1_gates.jl"]   # M1 validation ladder (9 gates; G5 skips if the LP1 bundle is absent)
     long && push!(regression, "test_is2_stability.jl")   # heavier fresh IS2 solve
 
     @testset "charm-solver regression (subprocess): $script" for script in regression

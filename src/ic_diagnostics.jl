@@ -17,9 +17,6 @@ using Tables
 using Printf
 using LinearAlgebra
 
-@inline function _finite_or_nan(x::Float64)
-    return isfinite(x) ? x : NaN
-end
 
 # ------------------------------------------------------------
 # Finite differences (uniform grid)
@@ -314,7 +311,16 @@ function ic_dt_stats(work::Work1D, grid, τ, model::IdealDiffViscModel; CFL::Flo
             uτ = sqrt(1 + ur^2)
             if model.diffusion_drive === :alpha
                 κ  = diff_kappa(T, μ, work.n[i], model)
-                kmax = max(kmax, κ * (uτ^2))
+                if model.charge_mode === :density_frame
+                    # Match the production cap in main.jl `compute_dt_from_work`:
+                    # the density frame's explicit parabolic flux is limited by
+                    # D_eff = κ(u^τ)²/(∂n/∂α), not by the bare κ(u^τ)².
+                    dndα = diff_dn_dalpha(T, work.alpha[i], model)
+                    dndα > 0.0 || (dndα = max(work.n[i], TINY))   # fail safe, see main.jl
+                    kmax = max(kmax, κ * (uτ^2) / dndα)
+                else
+                    kmax = max(kmax, κ * (uτ^2))
+                end
             elseif model.diffusion_drive === :n
                 DsT = model.kappa_coeff
                 D = safe_div(DsT, T) / fmGeV

@@ -222,7 +222,9 @@ function load_snapshot_dir_spline2d(
 end
 
 if abspath(PROGRAM_FILE) == abspath(@__FILE__)
-    r_grid, tau_grid, spl = load_snapshot_dir_spline2d("snapshots/snapshots_ideal_diff_visc_phi"; kx=1, ky=1)
+    length(ARGS) >= 1 || error("usage: julia tools/snapshot_splines.jl <snapshot_dir>  (a directory of snapshot_tau_*.csv written by run_sim_ideal_diff_visc)")
+    isdir(ARGS[1]) || error("snapshot directory not found: $(ARGS[1])")
+    r_grid, tau_grid, spl = load_snapshot_dir_spline2d(ARGS[1]; kx=1, ky=1)
     @show tau_grid[1]
     @show spl[:T](r_grid[10], tau_grid[1])
 end

@@ -8,6 +8,32 @@
 const π2 = π^2
 
 # -------------------------
+# Large-argument-safe scaled Bessel K
+# -------------------------
+# SpecialFunctions.besselkx(ν,x) = eˣ K_ν(x) throws an AmosException for x ≳ 1e10
+# ("complete loss of accuracy by argument reduction").  The solver reaches such x
+# legitimately: T_MIN = 1e-20 is the temperature floor used by the primitive-recovery
+# failure fallback (rhs.jl) and by the `max(T, T_MIN)` clamp on the success path, so
+# x = m_hq/T can be as large as 1.5e20.  Throwing there turns the fallback that is
+# supposed to keep the run alive into a hard crash of the whole simulation.
+#
+# For large x use the standard uniform asymptotic expansion
+#   eˣ K_ν(x) = √(π/2x) [ 1 + (μ-1)/(8x) + (μ-1)(μ-9)/(2!(8x)²) + … ],  μ = 4ν²,
+# which agrees with Amos to machine precision (relerr ≲ 1e-13 already at x=1e3, and
+# ≤ 4e-16 for x ≥ 1e4), so the switch is numerically seamless.  Same spirit as the
+# existing z>50 asymptotic branch in `_diff_tauN_impl` (src/dissipation.jl).
+const BESSELKX_ASYM_X = 1.0e4
+
+@inline function safe_besselkx(ν::Integer, x::Float64)
+    (isfinite(x) && x > 0.0) || return 0.0
+    x < BESSELKX_ASYM_X && return SpecialFunctions.besselkx(ν, x)
+    μ  = 4.0 * float(ν)^2
+    ix = 1.0 / (8.0 * x)
+    s  = 1.0 + (μ - 1.0)*ix * (1.0 + (μ - 9.0)*ix/2.0 * (1.0 + (μ - 25.0)*ix/3.0))
+    return sqrt(π/(2.0*x)) * s
+end
+
+# -------------------------
 # Conformal light + HQ Boltzmann
 # -------------------------
 Base.@kwdef struct ConformalHQEOS
@@ -38,8 +64,8 @@ end
     end
 
     A   = g * m^2 / (2π^2)
-    K2x = SpecialFunctions.besselkx(2, x)
-    K1x = SpecialFunctions.besselkx(1, x)
+    K2x = safe_besselkx(2, x)
+    K1x = safe_besselkx(1, x)
 
     exp_arg = (μ - m) / T
     Efac    = exp(exp_arg)
@@ -102,8 +128,8 @@ end
     end
 
     A   = g * m^2 / (2π^2)
-    K2x = SpecialFunctions.besselkx(2, x)
-    K1x = SpecialFunctions.besselkx(1, x)
+    K2x = safe_besselkx(2, x)
+    K1x = safe_besselkx(1, x)
 
     exp_arg = (μ - m) / T
     Efac    = exp(exp_arg)
@@ -472,7 +498,7 @@ end
    
     # This factor is independent of (T, μ); cache it to avoid per-call besseli allocations.
     A   = eos.canon_factor*g * m^2 / (2π^2)
-    K2x = SpecialFunctions.besselkx(2, x)
+    K2x = safe_besselkx(2, x)
 
     z   = (μ - m) / T
     z   = clamp(z, -700.0, 700.0)

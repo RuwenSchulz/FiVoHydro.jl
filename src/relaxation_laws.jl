@@ -1,10 +1,15 @@
 # ==============================================================================
-# src/relaxation_laws.jl
+# src/relaxation_laws.jl — REFERENCE implementation of the scalar MIS relaxation laws.
 #
-# EDIT THIS FILE to change the MIS relaxation equations.
-#
-# The solver calls these hooks from `relax_dissipative!`.
-# Keep these functions pure (no allocations) for performance.
+# NOT a solver hook. `relax_dissipative!` (src/dissipation.jl) does NOT dispatch through these
+# functions: it discretises the same laws inline with backward Euler plus the advective / λ_NN /
+# projected-derivative couplings and the stabilizers. What lives here is the EXACT exponential
+# solution of the bare operator-split laws
+#     τn uτ dν/dτ + (1 + δ θ) ν = ν_NS,   τΠ uτ dΠ/dτ + Π = Π_NS,   τπ uτ dπ/dτ + (1 + δπ θ) π = π_NS,
+# used as the analytic reference by FiVoBenchmark/bench_diffusion.jl (B2: "IS relaxation reproduces
+# the analytic exponential") and by test/runtests.jl (pins that the solver's backward-Euler update
+# and this exact form are discretisations of one ODE). Editing this file changes NO production
+# result; to change the relaxation equations edit `relax_dissipative!`.
 # ==============================================================================
 
 abstract type RelaxationLaw end

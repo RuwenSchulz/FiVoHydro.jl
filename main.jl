@@ -1,14 +1,10 @@
 #!/usr/bin/env julia
 # ==============================================================================
-# hydro_ideal_axisface_trustworthy_stable_phi_diff_visc_clean.jl
-#
-# Cleaned + fixes applied:
-#   - Introduced TINY (=1e-300) and removed all Float64-underflow "1e-500" guards
-#   - HLLE / wavespeeds / fits now use TINY-guarded denominators
-#   - diff_tauN: K2 protected against near-zero to avoid Inf ratios
-#   - compute_dt_from_work now honors CFL, CFLτ, diff_dt_coeff and is called with run-time values
-#   - Added prime_work_from_U!() to initialize work caches before the first dt-from-work call
-#   - (Recommended physics) ν_NS uses the conventional sign: ν_NS = -κ uτ^2 ∂r α
+# main.jl — `module hydro`: the FiVo 1+1D radial-Milne finite-volume solver for a viscous fluid
+# (T, u^r, Π, π) carrying a diffusing conserved charge (n, ν^r): HLLE + MUSCL + SSPRK2/3 with
+# operator-split MIS relaxation. Entry points: `run_sim_ideal_diff_visc(; kwargs...)` (library use)
+# and `main()` (CLI, ENV-driven). The charm-current-only solvers live in main2*.jl as separate
+# modules. See README.md for the entry-point map, the stabilizer table and the ENV flag list.
 #
 # NOTE ON SIGN CONVENTIONS (IMPORTANT):
 #   stored = DISS_SIGN * physical   (DISS_SIGN = ±1)
@@ -95,7 +91,24 @@ function compute_dt_from_work(work::Work1D, grid, τ, model; CFL::Float64=0.2, C
             uτ = sqrt(1 + ur^2)
             if model.diffusion_drive === :alpha
                 κ  = diff_kappa(T, μ, work.n[i], model)
-                kmax = max(kmax, κ * (uτ^2))
+                if model.charge_mode === :density_frame
+                    # Density frame integrates J^r = -κ(u^τ)²∂_rα EXPLICITLY, so the
+                    # Von-Neumann limit is set by the diffusivity of the evolved
+                    # variable n, i.e. D_eff = κ(u^τ)²/(∂n/∂α) — see `diff_dn_dalpha`
+                    # (src/dissipation.jl).  Using the bare κ(u^τ)² here is too
+                    # permissive by 1/(∂n/∂α) ≈ 1/n (~80× at τ₀, >1000× once the
+                    # fireball has cooled) and lets the charge sector go unstable.
+                    # MIS keeps the bare form: there the flux is carried by the
+                    # relaxing ν^r field, not by an explicit parabolic update.
+                    # FAIL SAFE: if ∂n/∂α is unavailable (0.0), fall back to the
+                    # Boltzmann identity ∂n/∂α = n rather than to the bare κ — the
+                    # bare form is the unstable one, so it must never be the fallback.
+                    dndα = diff_dn_dalpha(T, work.alpha[i], model)
+                    dndα > 0.0 || (dndα = max(work.n[i], TINY))
+                    kmax = max(kmax, κ * (uτ^2) / dndα)
+                else
+                    kmax = max(kmax, κ * (uτ^2))
+                end
             elseif model.diffusion_drive === :n
                 DsT = model.kappa_coeff
                 D = safe_div(DsT, T) / fmGeV
@@ -504,10 +517,10 @@ function run_sim_ideal_diff_visc(; outdir::String,
                                 charge_mode::Symbol = :mis,
                                 # charge diffusion
                                 enable_diff::Bool=true,
-                                DsT::Float64=5.24,
+                                DsT::Float64=0.24,      # D_s·T [GeV·fm]; overridden by kappa_coeff if given. 0.24 = the value main(), the benches and the tests use
                                 kappa_coeff::Union{Nothing,Float64}=nothing,
                                 diffusion_drive::Symbol = :alpha,
-                                tauN_coeff::Float64=1.0, #CHECK THAT!
+                                tauN_coeff::Float64=1.0,   # pure multiplier on the BARE τ_n = D_s·z·K₃/K₂ from diff_tauN (no g_hq; see the 2026-07 τ_n notes in README.md)
                                 deltaN_factor::Float64=0.0,
                                 diff_dt_coeff::Float64=0.02,
                                 shear_dt_coeff::Float64=0.3,

@@ -158,8 +158,8 @@ end
 
 
 # Backward-compatible constructor: callers that predate the charge_mode field
-# (e.g. mainBDNK.jl, the benches, test/runtests.jl) pass the 39 fields up to
-# relax_advect_pi; default charge_mode to :mis for them.  The full 40-argument
+# (e.g. mainBDNK.jl, the benches, test/runtests.jl) pass eos, layout, primrec + the 36 fields
+# up to relax_advect_pi (39 positional args); default charge_mode to :mis for them.  The full 40-argument
 # inner constructor remains available and is used by main.jl.
 IdealDiffViscModel(eos, layout, primrec, rest::Vararg{Any,36}) =
     IdealDiffViscModel(eos, layout, primrec, rest..., :mis)

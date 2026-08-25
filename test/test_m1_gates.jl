@@ -14,10 +14,10 @@
 #   G5  the production LP1 background runs, with NO cell ever leaving the realizability cone
 #   G6  strong-gradient stress test: |w| stays inside the cone with no clamp anywhere
 #
-# Run: julia --project=Julia Julia/FiVoHydro.jl/test_m1_gates.jl
+# Run: julia --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/test_m1_gates.jl   (also run by test/runtests.jl)
 # ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-include(joinpath(@__DIR__, "main2M1.jl"))
+include(joinpath(@__DIR__, "..", "main2M1.jl"))
 using .hydro_current_M1
 using .hydro_current_M1: M1Background, M1Grid1D, solve_M1, recover, source_moments,
                          eos_Pne, LatticeHRGEOS,
@@ -139,7 +139,7 @@ end
 
 # ── G5 : the production LP1 background ──────────────────────────────────────────────────────────
 let
-    p = normpath(joinpath(@__DIR__, "..", "Projects", "LangevinPaper1", "data",
+    p = normpath(joinpath(@__DIR__, "..", "..", "Projects", "LangevinPaper1", "data",
                           "hydro_splines_matchedIC", "charm_physical_constFluidum.jld2"))
     if !isfile(p)
         @printf("\nG5  skipped — %s not found\n", p)

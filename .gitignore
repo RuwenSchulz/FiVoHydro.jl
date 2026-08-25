@@ -1,2 +1,9 @@
 # Julia allocation profiler output
 *.mem
+
+# generated solver output (kept on disk, not tracked)
+snapshots/
+debug_flux/
+debug_primfail/
+*.jld2
+*.jls

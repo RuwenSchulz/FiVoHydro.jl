@@ -88,7 +88,9 @@ function analyze_dir(snapshot_dir::AbstractString; eos=hydro.LatticeHRGEOS())
 end
 
 function main()
-    snapshot_dir = length(ARGS) >= 1 ? ARGS[1] : "snapshots/snapshots_ideal_fluidum"
+    length(ARGS) >= 1 || error("usage: julia tools/analyze_snapshot_causality.jl <snapshot_dir>  (a directory of snapshot_tau_*.csv written by run_sim_ideal_diff_visc)")
+    snapshot_dir = ARGS[1]
+    isdir(snapshot_dir) || error("snapshot directory not found: $snapshot_dir")
     analyze_dir(snapshot_dir)
 end
 

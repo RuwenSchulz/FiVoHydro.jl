@@ -34,6 +34,46 @@
     return isfinite(dndT) ? dndT : 0.0
 end
 
+# ∂n/∂α at fixed T — the Jacobian between the α-driven diffusive flux and the
+# density that is actually evolved.  Needed for the parabolic timestep cap: the
+# density-frame flux is J^r = -κ(u^τ)²∂_r α, so written as a diffusion equation
+# for n the effective diffusivity is
+#
+#     D_eff = κ (u^τ)² / (∂n/∂α)                                   (dfDeff)
+#
+# and the Von-Neumann limit is dt ≤ C dr²/D_eff, NOT dt ≤ C dr²/(κ(u^τ)²).
+# For a Boltzmann gas n ∝ e^α so ∂n/∂α = n and D_eff = (DsT/T)ħc(u^τ)², i.e. the
+# bare-κ form is too permissive by 1/n — a factor ~80 at τ₀ that grows past 1000
+# as the fireball cools.  See main.jl `compute_dt_from_work`.
+#
+# A plain central difference on n is NOT good enough here.  n is exponential in α, so
+#   (a) an absolute step loses accuracy as α grows, and
+#   (b) around α ≳ 700 the shifted evaluations overflow while n itself is still finite,
+#       making the difference collapse to 0 or NaN.
+# A zero/NaN return would make the caller fall back to the bare κ — silently restoring
+# the very instability this function exists to prevent.  So we differentiate the LOG
+# instead: dn/dα = n · dln(n)/dα, with a fixed absolute step in α (the natural variable
+# of the exponential).  This is exact to O(h²) for any n ∝ e^{cα}, is insensitive to the
+# magnitude of n, and degrades gracefully.  We return 0.0 only when the EOS genuinely has
+# no α-response (e.g. inside LatticeHRGEOS's z-clamp, where ∂n/∂α really is 0); the caller
+# must treat 0.0 as "unknown" and FAIL SAFE, not as "use the bare κ".
+@inline function diff_dn_dalpha(T::Float64, α::Float64, model::IdealDiffViscModel;
+                                h::Float64=1e-4)
+    T0 = max(T, T_EOS_MIN)
+
+    _, n0, _ = eos_Pne(T0, α * T0, model.eos)
+    (isfinite(n0) && n0 > 0.0) || return 0.0
+
+    _, np, _ = eos_Pne(T0, (α + h) * T0, model.eos)
+    _, nm, _ = eos_Pne(T0, (α - h) * T0, model.eos)
+    (isfinite(np) && isfinite(nm) && np > 0.0 && nm > 0.0) || return 0.0
+
+    dlnn = (log(np) - log(nm)) / (2h)          # = 1 exactly for n ∝ e^α
+    dndα = n0 * dlnn
+
+    return (isfinite(dndα) && dndα > 0.0) ? dndα : 0.0
+end
+
 @inline function _fluidum_single_hadron_normalization(T::Float64, α::Float64, eos::LatticeHRGEOS)
     Tm = max(T, T_MIN)
     m = hq_mass(eos)
@@ -236,18 +276,6 @@ function compute_theta_u!(work::Work1D, grid, τ)
     return nothing
 end
 
-function compute_dvdr!(work::Work1D, grid)
-    ng = grid.nghost
-    Ntot = length(work.vC)
-    fill!(work.dvdr, 0.0)
-    i0 = ng+1
-    work.dvdr[i0] = (work.vF[i0] - work.vF[i0-1]) / grid.dr
-    Threads.@threads for i in (i0+1):(Ntot-ng)
-        work.dvdr[i] = (work.vF[i] - work.vF[i-1]) / grid.dr
-    end
-    return nothing
-end
-
 # Uses face-centered u^r stored in work.vF (by compute_theta_u!) to build ∂_r u^r.
 function compute_durdr!(work::Work1D, grid)
     ng = grid.nghost
@@ -345,7 +373,7 @@ function smooth_n_for_clip!(work::Work1D, grid; eps::Float64=0.25)
     return nothing
 end
 
-function axis_project_nur_tapered!(U::AbstractMatrix, grid::Grid1D, model::IdealDiffViscModel; nfit::Int=10)
+function axis_project_nur_tapered!(U::AbstractMatrix, grid::Grid1D, model::IdealDiffViscModel; nfit::Int=2)   # default = run_sim_ideal_diff_visc's axis_project_nfit
     L = layout(model)
     (!L.hasNur) && return nothing
 

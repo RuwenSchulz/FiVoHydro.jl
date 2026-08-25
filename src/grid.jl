@@ -1,5 +1,5 @@
 # =========================
-# src/grid.jl   (STEP 3)
+# src/grid.jl — Grid1D (axis at a face, ghost cells both sides) + make_grid
 # =========================
 
 struct Grid1D
