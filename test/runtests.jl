@@ -293,6 +293,7 @@ let JLBIN = joinpath(Sys.BINDIR, Base.julia_exename()),
     long  = lowercase(get(ENV, "FIVOHYDRO_LONG_TESTS", "0")) in ("1", "true", "yes", "y")
 
     regression = ["test_is2_drive.jl", "test_density_frame_flux.jl", "test_bdnk_causal.jl",
+                  "test_bdnk_frame_coeffs.jl",   # BDNK general-frame σ_T/σ_a; needs u^r ≠ 0 AND ∂_rT ≠ 0
                   "test_is2_causality.jl", "test_m1_gates.jl"]   # M1 validation ladder (9 gates; G5 skips if the LP1 bundle is absent)
     long && push!(regression, "test_is2_stability.jl")   # heavier fresh IS2 solve
 

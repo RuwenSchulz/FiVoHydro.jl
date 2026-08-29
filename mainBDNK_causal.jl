@@ -27,7 +27,7 @@
 # FP-MATCHED MODE (`fp_matched=true`) — audit finding B-4, implemented 2026-08-22.
 # The full FP-matched BDNK current (Tex/HydroFPderivation/FP_Hydro_matching.tex eq:BDNK_coeffs) is
 #     ν^μ = −κ Δ^{μν}∂_να − σ_T Δ^{μν}∂_ν ln T + σ_a u̇^μ,
-#     σ_T = κ·z K₃(z)/K₂(z),   σ_a = −κ/T,   u̇^μ = u^ν∂_ν u^μ
+#     σ_T = κ·z K₃(z)/K₂(z),   σ_a = −σ_T = −n τ_n,   u̇^μ = u^ν∂_ν u^μ
 # σ_T/κ = z K₃/K₂ is 6.3 (T=0.45 GeV) … 12.7 (T=0.15 GeV), so on a fireball with a radial T-gradient
 # the Soret term is 3–6× LARGER than the α-term (4.5× at r=8 fm on a 0.45→0.15 GeV profile) and the
 # acceleration term is ~1–3× it. `fp_matched=true` switches these on; the resulting solution differs
@@ -124,8 +124,15 @@ end
     return κ * z * _K3overK2(z)
 end
 
-"""σ_a = −κ/T — inertial / acceleration coefficient (eq:BDNK_coeffs)."""
-@inline sigma_a_of(T, κ) = -κ / max(T, T_MIN)
+"""σ_a = −σ_T = −κ·z K₃(z)/K₂(z) = −n τ_n — inertial / acceleration coefficient.
+
+🔴 CORRECTED 2026-08-29: was `-κ/T`. See `main2.jl :: diff_sigmaa_bg` for the full note.
+In short: FP_Hydro_matching eq:CE_LHS drops a factor E from the acceleration term of the
+Chapman–Enskog vector source, so σ_a came out smaller than σ_T by a factor M K₃/K₂ and
+dimensionally incommensurate with σ_α = κ. Tolman–Ehrenfest ties |σ_a| = |σ_T|, and
+AttractorHydro App. app:overdamped reaches the same −n τ_n a^r from the Smoluchowski limit.
+Gates: `Julia/tools/derive_bdnk_frame_coeffs.wl`, `test/test_bdnk_frame_coeffs.jl`."""
+@inline sigma_a_of(T, κ, eos) = -sigma_T_of(T, κ, eos)
 
 """Local ε_ν ≥ κ (causal).  :kappa ⇒ ε_ν=κ (v_sig=c, minimal causal);
    :is_match ⇒ ε_ν=χ_α·τ_n (FP/IS gap), floored at κ to guarantee causality."""
@@ -185,7 +192,7 @@ end
     Sτ = 0.0; Sr = 0.0
     if fp_matched
         σT = sigma_T_of(T, κ, eos)
-        σa = sigma_a_of(T, κ)
+        σa = sigma_a_of(T, κ, eos)
         Tl = max(T, T_MIN)
         dt_lnT = dtT/Tl
         dr_lnT = drT/Tl

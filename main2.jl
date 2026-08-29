@@ -285,10 +285,26 @@ end
 end
 
 @inline function diff_sigmaa_bg(T::Float64, α::Float64, nbg::Float64, DsT::Float64, eos)
-    # σ_a = -κ_n/T — acceleration coefficient (FP_Hydro_matching eq:BDNK_coeffs)
-    Tm = max(T, T_MIN)
-    κ = diff_kappa_bg(T, α, nbg, DsT, eos)
-    return -κ / Tm
+    # σ_a = -σ_T = -κ_n z K₃(z)/K₂(z) = -n τ_n — the acceleration (inertial-lag) coefficient.
+    #
+    # 🔴 CORRECTED 2026-08-29. This returned `-κ/T` until today, transcribed from
+    # FP_Hydro_matching eq:BDNK_coeffs, whose eq:CE_LHS drops a factor E from the
+    # acceleration term of the Chapman–Enskog vector source. Recomputing the streaming
+    # term gives   k^<μ>( ∇_μα + (E/T)[∇_μ lnT ∓ u̇_μ] ),  so u̇ carries the SAME moment
+    # weight E/T as ∇lnT and the two coefficients are tied: |σ_a| = |σ_T| = n τ_n.
+    # Three independent confirmations:
+    #   (i)   -κ/T is not dimensionally commensurate with σ_α = κ_n;
+    #   (ii)  Tolman–Ehrenfest: ∇lnT ∓ u̇ is the combination that vanishes in global
+    #         equilibrium, so a hydrostatic medium must carry no diffusion current.
+    #         With -κ/T it carries one, ~53% of either term on a u^r ≲ 1.2 background;
+    #   (iii) AttractorHydro App. app:overdamped derives the inertial channel
+    #         independently, from the Smoluchowski limit, and gets exactly -n τ_n a^r.
+    # Symbolic proof + three negative gates: Julia/tools/derive_bdnk_frame_coeffs.wl (19/19).
+    # Numerical gate: test/test_bdnk_frame_coeffs.jl. It FAILS on the old form, and it needs
+    # a background with u^r ≠ 0 AND ∂_rT ≠ 0 — which is exactly why nothing caught this:
+    # both shipped BDNK backgrounds have neither (FiVoBenchmark/CAUSAL_HYDRO_AUDIT.md, B-4),
+    # and in the probe limit σ_T and σ_a do not enter ModePaper1's eigenproblem either.
+    return -diff_sigmaT_bg(T, α, nbg, DsT, eos)
 end
 
 # Charm number density n(T,α) consistent with the diffusion coefficients above

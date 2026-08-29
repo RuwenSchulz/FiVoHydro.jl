@@ -249,7 +249,14 @@ end
 # ---------------------------------------------------------------------------
 # 12. FP-matched Soret (σ_T) + acceleration (σ_a) terms — finding B-4.
 #     ν^μ = −κ Δ^{μν}∂_να − σ_T Δ^{μν}∂_ν lnT + σ_a u̇^μ,
-#     σ_T = κ·z K₃(z)/K₂(z),  σ_a = −κ/T   (FP_Hydro_matching eq:BDNK_coeffs)
+#     σ_T = κ·z K₃(z)/K₂(z),  σ_a = −σ_T = −n τ_n
+# 🔴 2026-08-29: (a) below used to assert σ_a == −κ/T, i.e. it checked the shipped formula
+# against a hand copy of ITSELF, so it could confirm the transcription but never the physics
+# — the same failure mode as the CharmTempLib 3-D prefactor bug. The reference is now an
+# INDEPENDENT one: Tolman–Ehrenfest forces |σ_a| = |σ_T| (a hydrostatic medium carries no
+# diffusion current), and AttractorHydro App. app:overdamped reaches −n τ_n a^r from the
+# Smoluchowski limit. See Julia/tools/derive_bdnk_frame_coeffs.wl and
+# test/test_bdnk_frame_coeffs.jl, which exercises the u^r ≠ 0, ∂_rT ≠ 0 background B-4 lacked.
 # Locks four things: the coefficients; that the r-source reproduces main2BDNK.jl's independent
 # fp_matched expression EXACTLY; that u̇ stays orthogonal to u; and that the flag is a strict
 # no-op exactly where the physics says it must be (isothermal, and Bjorken where u^r=0 kills
@@ -263,13 +270,14 @@ let eosF = BC.ConformalHQEOS(g_eff=40.0, m_hq=1.5, g_hq=6.0), DsT = 0.24
         want_sT = κ * z * SFF.besselkx(3,z)/SFF.besselkx(2,z)
         abs(BC.sigma_T_of(T, κ, eosF) - want_sT) < 1e-12*max(1.0,abs(want_sT)) ||
             fail("σ_T wrong at T=$T")
-        abs(BC.sigma_a_of(T, κ) - (-κ/T)) < 1e-12*max(1.0,κ/T) || fail("σ_a wrong at T=$T")
+        abs(BC.sigma_a_of(T, κ, eosF) - (-want_sT)) < 1e-12*max(1.0,abs(want_sT)) ||
+            fail("σ_a wrong at T=$T (expected -σ_T = -n τ_n)")
     end
     # (b) Sr must equal main2BDNK.jl's fp_matched source expression exactly
     for T in (0.15,0.3,0.5), ur in (0.0,0.5,1.5), dtT in (-0.05,0.02), drT in (-0.03,0.01),
         dtur in (0.0,0.03), drur in (0.0,0.05)
         n = BC.n_of(0.5, T, eosF); κ = BC.kappa_of(T, n, DsT)
-        σT = BC.sigma_T_of(T, κ, eosF); σa = BC.sigma_a_of(T, κ); uτ = sqrt(1+ur^2)
+        σT = BC.sigma_T_of(T, κ, eosF); σa = BC.sigma_a_of(T, κ, eosF); uτ = sqrt(1+ur^2)
         ref = -σT*(ur*uτ*(dtT/T) + uτ^2*(drT/T)) + σa*(uτ*dtur + ur*drur)
         c = BC.cell_coeffs(0.5, T, ur, DsT, eosF, :kappa;
                            dtT=dtT, drT=drT, dtur=dtur, drur=drur, fp_matched=true)
