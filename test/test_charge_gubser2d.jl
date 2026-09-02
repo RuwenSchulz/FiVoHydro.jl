@@ -74,7 +74,24 @@ const BOX  = 14.0
 const RCMP = 3.0
 const EOS  = H.ConformalHQEOS()
 const TSCALE = hydro.gubser_Tscale_from_center_T(TAU0, QG, TC0)
-const CN   = 1.0/TC0^3          # so n = 1 at the centre at tau0
+# 🔴 THE AMPLITUDE IS PART OF THE TEST, not a free choice. ConformalHQEOS's
+# heavy-quark sector is a Boltzmann gas with P_hq = n T, so unlike LatticeHRGEOS
+# (dP/dmu = 0 exactly) the charge DOES contribute to the pressure. At n = 1 at the
+# centre that is 0.8% of P, the flow is then NOT the ideal conformal Gubser
+# solution, and n/T^3 is not exactly conserved - the reference is wrong, not the
+# solver. Measured, scaling the amplitude down:
+#
+#   n(centre)   P_hq/P     inv N=200   inv N=400   order
+#   1.0         8.04e-3    3.44e-3     1.91e-3     0.85
+#   0.1         8.10e-4    2.16e-3     6.46e-4     1.74
+#   0.01        8.11e-5    2.03e-3     5.20e-4     1.97
+#   0.001       8.11e-6    2.02e-3     5.08e-4     1.99
+#
+# The order goes to 2 as the back-reaction goes to zero. Charge transport IS
+# second order; the first version of this gate reported 0.85 and blamed the
+# solver. n = 0.01 at the centre keeps the tracer approximation exact to 8e-5,
+# and the transport accuracy is independent of the amplitude (it is linear in n).
+const CN   = 0.01/TC0^3
 
 Tana(τ, r)  = hydro.gubser_temperature(τ, r, QG, TSCALE)
 urana(τ, r) = hydro.gubser_ur(τ, r, QG)
@@ -158,18 +175,16 @@ end
         @test r.asym < 1e-11          # the flow is symmetric; so must the charge be
     end
     # THE INVARIANT: n/T^3 must not move
-    @test rs[end].worst_c < 5e-3
+    @test rs[end].worst_c < 1e-3
     oi = log2(rs[2].worst_c/rs[3].worst_c)
     oc = log2(rs[2].L2c/rs[3].L2c)
     @printf("  core (r<=2): invariant %.3e -> %.3e -> %.3e (order %.2f) ; L2(n) %.3e -> %.3e -> %.3e (order %.2f)\n",
             rs[1].worst_c, rs[2].worst_c, rs[3].worst_c, oi,
             rs[1].L2c, rs[2].L2c, rs[3].L2c, oc)
-    @test rs[end].L2c < 5e-3
-    # ⚠ NOT second order. The invariant converges at ~0.9 and L2 at ~0.4 toward a
-    # floor near 2e-3; asserted as a bound plus a requirement that it still
-    # improves, rather than claimed as an order it does not have.
-    @test oc > 0.2
-    @test rs[3].worst_c < rs[1].worst_c
+    @test rs[end].L2c < 2e-3      # measured 1.21e-3 at N = 400
+    # SECOND ORDER, once the reference is exact (see the amplitude note above).
+    @test oc > 1.5
+    @test oi > 1.5
     # charge lost through the outflow boundary is PHYSICAL - Gubser expands past
     # the box - so this is bounded, not asserted at round-off, and its
     # resolution-independence is what identifies it as outflow.

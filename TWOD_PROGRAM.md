@@ -1976,6 +1976,11 @@ so sub-percent needs N ≳ 600, not 300. Charge conservation is fine throughout 
 
 ### The blocker, stated plainly
 
+> 🔴 **RETRACTED 2026-09-02 — see §6x.** There is no charge-specific first-order problem. The G3g
+> order of 0.85 was **my reference being inexact** (the charge back-reacts through P_hq = nT in
+> `ConformalHQEOS`), and the full-physics order of 1.13 is a property of the **initial condition**:
+> the temperature field self-converges at 1.09 on the very same runs. Kept in place, dated.
+
 Charge transport converges at ~first order in **two independent tests** — the G3g invariant at order
 0.85 with κ = 0 on Gubser, and the full-physics charm field at 1.13 — while T and u converge at 2.00
 in the very same runs. The cause is **not identified**. It is not the diffusion-current advection
@@ -1986,4 +1991,58 @@ Until that is found, the honest position is: **the bulk fields are second-order 
 charm field is first-order and ~1.6% at production resolution.** Anything quoted from n(x,y) inherits
 that, and running at N = 600 buys a factor of two rather than the factor of four a second-order
 scheme would give.
+
+---
+
+## 6x. ⛔ The charge sector is second order after all — two retractions
+
+§6v and §6w both concluded that charge transport converges at ~first order while T and u reach
+second, and called it the blocker for sub-percent charm. **Both were wrong, for different reasons.**
+
+### G3g: my reference was not a solution
+
+`ConformalHQEOS`'s heavy-quark sector is a Boltzmann gas with **P_hq = n T**, so — unlike
+`LatticeHRGEOS`, where dP/dμ = 0 *exactly* — the charge contributes to the pressure. At the amplitude
+G3g used (n = 1 at the centre) that is 0.8% of P, the flow is therefore **not** the ideal conformal
+Gubser solution, and n/T³ is not exactly conserved. Scaling the amplitude down:
+
+| n(centre) | P_hq/P | invariant N=200 | N=400 | order |
+|---|---|---|---|---|
+| 1.0 | 8.04e-3 | 3.44e-3 | 1.91e-3 | 0.85 |
+| 0.1 | 8.10e-4 | 2.16e-3 | 6.46e-4 | 1.74 |
+| 0.01 | 8.11e-5 | 2.03e-3 | 5.20e-4 | **1.97** |
+| 0.001 | 8.11e-6 | 2.02e-3 | 5.08e-4 | **1.99** |
+
+**The order goes to 2 as the back-reaction goes to zero.** The transport was always second order; the
+reference was wrong. G3g now runs at n(centre) = 0.01, where the tracer approximation holds to 8e-5,
+and asserts second order. The transport accuracy is independent of the amplitude — it is linear in n.
+
+The clue was there in the code all along: `primrec2d.jl` says the staged fallback is "EXACT rather
+than an approximation **for LatticeHRGEOS**", because dP/dμ = 0 there. G3g uses the conformal EOS.
+
+### The full physics: it is the initial condition, not the charge
+
+The self-convergence of the charm field on the physical fluctuating event gave order 1.13. The
+control I should have run at the same time — the **temperature** field, from the very same runs:
+
+| | ‖·(150) − ·(600)‖ | ‖·(300) − ·(600)‖ | order |
+|---|---|---|---|
+| charm n | 3.563e-2 | 1.625e-2 | **1.13** |
+| temperature T | 2.120e-2 | 9.989e-3 | **1.09** |
+
+**T converges at the same order as n.** So the ~first-order behaviour belongs to the initial
+condition, not to the charge sector: a single fluctuating event is covered in sharp extrema, and a
+TVD limiter drops to first order at every one of them. That is correct behaviour for the scheme, not
+a defect — and it applies equally to the bulk fields.
+
+### What this actually means for accuracy
+
+* **On smooth problems the charge sector is second order and sub-percent** — 5.1e-4 at N = 400 on
+  Gubser, and the LRF projection with flow is good to 0.2–0.7% up to v = 0.87 (§6w).
+* **On a single fluctuating event, everything is ~first order** and at N = 300 the fields carry
+  1.0% (T) and 1.6% (n) of their own norms. Sub-percent there needs a finer grid, and it buys a
+  factor of two per halving rather than four — for the temperature just as much as for the charm.
+
+That is a statement about resolving a lumpy initial condition, which is physics, not a solver
+deficiency. Nothing here is charge-specific, and the "blocker" of §6w does not exist.
 
