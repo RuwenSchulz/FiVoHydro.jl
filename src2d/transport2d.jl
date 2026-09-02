@@ -13,7 +13,7 @@
 # gate is what keeps the duplication honest: if `src/dissipation.jl` changes, the
 # copy stops matching and the gate fails.
 #
-# Source: src/dissipation.jl:77-158 (2026-09-01).
+# Source: src/dissipation.jl:77-174 (2026-09-02, after the g_hq fix below).
 # ==============================================================================
 
 @inline function _fluidum_single_hadron_normalization_2d(T::Float64, α::Float64, eos::LatticeHRGEOS)
@@ -38,7 +38,24 @@ end
     b5 = b3 + 8.0 / z * b4
     ex = exp(clamp(α - z, -700.0, 700.0))
 
-    tauq = (DsT / (96.0 * π^2 * Tm^3)) * m^5 * ex * (2.0 * b1 - 3.0 * b3 + b5)
+    # 2026-09-02: `eos.g_hq *` ADDED. tau_n = D_s I_31/(T P_0) is a RATIO of
+    # equilibrium moments, so the degeneracy MUST cancel: tau_n = D_s z K3/K2,
+    # independent of g_hq. `norm` below carries `eos.g_hq`, so `tauq` has to as
+    # well. Without it tau_n came out a factor g_hq = 6 too SMALL (measured
+    # exactly 6.0000 at every T) and the diffusion signal speed sqrt(D_s/tau_n)
+    # went SUPERLUMINAL above T = 0.4924 GeV -- inside the production IC, which
+    # peaks at T_max = 0.5814.
+    #
+    # This is the SAME defect `main2.jl::diff_tauN_bg` (39da649) and `main2IS2.jl`
+    # (c4fe4a0) were fixed for on 2026-07-16/21; `src/dissipation.jl` and this
+    # file, its verbatim 2-D copy, were both missed in that pass and are fixed
+    # together here (G3a asserts the two stay bit-identical). Note the
+    # GENERIC method below never had it -- it builds the bare ratio directly -- so
+    # until now the two methods of this function disagreed by 6x depending on the
+    # EOS type passed in. Found by gate Gk (`test_charge_dispersion2d.jl`), which
+    # checks tau_n against the closed form instead of against a copy of itself;
+    # see TWOD_PROGRAM.md D8 / 6y.
+    tauq = eos.g_hq * (DsT / (96.0 * π^2 * Tm^3)) * m^5 * ex * (2.0 * b1 - 3.0 * b3 + b5)
     norm = _fluidum_single_hadron_normalization_2d(Tm, α, eos)
     abs(norm) <= TINY && return 0.0
 

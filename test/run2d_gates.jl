@@ -27,6 +27,7 @@ const GATES = [
     ("G2  shear + bulk",                   "test_dissipation2d.jl"),
     ("G3  charge / diffusion",             "test_charge2d.jl"),
     ("G3g charge advection on Gubser",     "test_charge_gubser2d.jl"),
+    ("Gk  charge dispersion + k_*",         "test_charge_dispersion2d.jl"),
     ("G4  reproduction vs 1-D production", "test_reproduction2d.jl"),
     ("G5  production IC, all sectors",      "test_production_allsectors2d.jl"),
     ("G6  non-axisymmetric IC",             "test_elliptic2d.jl"),

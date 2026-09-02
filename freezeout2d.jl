@@ -85,6 +85,8 @@ function freeze_surface(tag; N = 200, box = 18.0, dτ = 0.05, τmax = 16.0,
     nx, ny = g.Nx, g.Ny
     τfo = fill(NaN, nx, ny); uxf = zeros(nx, ny); uyf = zeros(nx, ny)
     wasabove = falses(nx, ny); refroze = 0
+    # previous sample, for the linear crossing below
+    Tprev = fill(NaN, nx, ny); τprev = Ref(0.4)
     τ = 0.4
     H.rhs_2d!(wk.k, U, g, τ, m, wk)
     record!(τ) = begin
@@ -94,9 +96,20 @@ function freeze_surface(tag; N = 200, box = 18.0, dτ = 0.05, τmax = 16.0,
                 if !isnan(τfo[a,b]); refroze += 1; end
                 wasabove[a,b] = true; τfo[a,b] = NaN          # still hot
             elseif wasabove[a,b] && isnan(τfo[a,b])
-                τfo[a,b] = τ; uxf[a,b] = wk.ux[i]; uyf[a,b] = wk.uy[i]
+                # INTERPOLATE the crossing rather than taking the first sampled
+                # tau below T_fo. Recording the sample itself puts the surface
+                # systematically LATE by up to dtau, and the yield inherits it:
+                # measured, dtau 0.05 -> 0.02 moved dN/dy by -0.9%, which is a
+                # sampling bias and not convergence. With the crossing
+                # interpolated the leading term is gone.
+                Tp = Tprev[a,b]
+                τfo[a,b] = (isnan(Tp) || Tp <= T_FO) ? τ :
+                           τprev[] + (τ - τprev[])*(Tp - T_FO)/(Tp - T)
+                uxf[a,b] = wk.ux[i]; uyf[a,b] = wk.uy[i]
             end
+            Tprev[a,b] = T
         end
+        τprev[] = τ
     end
     record!(τ)
     while τ < τmax - 1e-9

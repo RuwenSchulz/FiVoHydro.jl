@@ -344,7 +344,7 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
             # res.maxu / res.dQ without first testing res.ok
             return (ok = false, τ = τ, nsteps = nsteps, nprimfail = nprimfail,
                     nvacuum = nvacuum, max_shear_res = max_shear_res, work = wk,
-                    maxu = NaN, dQ = NaN, Q0 = Qin, Q1 = NaN)
+                    maxu = NaN, dQ = NaN, Q0 = Qin, Q1 = NaN, minPtot = NaN)
         end
 
         τ += Δused
@@ -392,6 +392,12 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
     # fluid legitimately free-streams outward. It is therefore LARGER than the
     # above-freeze-out figure the gates assert on: measured on ev02 at tau = 8,
     # 3.46 here against 1.36 restricted to T > T_fo. Do not compare the two.
+    # `minPtot` exists because a negative total pressure is the failure mode that
+    # hides: the bulk regulator caps Pi against the pressure AT RELAXATION TIME,
+    # and if P then falls ~10% before the next step P + Pi can go negative with
+    # nothing reporting it. Measured on 60% multiplicative noise and on 1.3 GeV
+    # hot spots, min(P+Pi) reached -4.0e-2 and -2.9e-2 while `ok` stayed true.
+    minPtot = Inf
     maxu = 0.0; Qout = 0.0
     let L = model.layout, ng = g.nghost
         @inbounds for ix in (ng+1):(ng+g.Nx), iy in (ng+1):(ng+g.Ny)
@@ -399,13 +405,17 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
             Qout += U[L.iDtau, i]
             u = hypot(wk.ux[i], wk.uy[i])
             u > maxu && (maxu = u)
+            if wk.P[i] > 0
+                pt = wk.P[i] + (L.hasPi ? phys_from_stored(U[L.iPi, i]) : 0.0)
+                pt < minPtot && (minPtot = pt)
+            end
         end
     end
     dQ = abs(Qin) > 0 ? abs(Qout - Qin)/abs(Qin) : 0.0
 
     return (ok = true, τ = τ, nsteps = nsteps, nprimfail = nprimfail,
             nvacuum = nvacuum, max_shear_res = max_shear_res, work = wk,
-            maxu = maxu, dQ = dQ, Q0 = Qin, Q1 = Qout)
+            maxu = maxu, dQ = dQ, Q0 = Qin, Q1 = Qout, minPtot = minPtot)
 end
 
 end # module
