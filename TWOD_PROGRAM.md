@@ -1686,3 +1686,79 @@ domain for τ ≲ 2, and it is worse at 0–5% than at 20–30% (1.46) because t
 
 Figures: `plots2d/{T,n}_{evolution,slices}_00-05_ev01.*` and `_00-05_ev03.*`.
 
+---
+
+## 6t. dx = 0.05 fm: the production runs are already converged
+
+The benchmarks were effectively there already — Gubser at N = 400 over ±10 fm **is** dx = 0.05, and
+the sound gate at N = 128 over 6 fm is dx = 0.047. The open question was the production case.
+
+Physical single event `00-05_ev01`, IC at dx = 0.05, solver box ±18 fm, to τ = 8:
+
+| N | dx [fm] | ε_p | v₃ | max\|u\| | max\|π\|/P | ΔQ/Q | wall |
+|---|---|---|---|---|---|---|---|
+| 200 | 0.180 | 0.05479 | 0.08671 | 1.69 | 1.002 | 9.3e-6 | 0.4 min |
+| 280 | 0.129 | 0.05478 | 0.08682 | 1.70 | 1.030 | 8.6e-6 | 0.9 min |
+| 400 | 0.090 | 0.05485 | 0.08729 | 1.71 | 1.029 | 7.2e-6 | 2.3 min |
+| 560 | 0.064 | 0.05485 | 0.08740 | 1.71 | 1.000 | 4.3e-6 | 5.9 min |
+| **720** | **0.050** | **0.05490** | **0.08748** | **1.72** | **1.000** | **2.7e-6** | **12.3 min** |
+
+**ε_p moves 0.2% and v₃ 0.9% across a 3.6× change in dx**, with v₃ flattening (the last two differ by
+0.1%). Charge conservation improves monotonically, 9.3e-6 → 2.7e-6. The seeded T_max is stable to
+0.13%. So the production numbers quoted elsewhere in this document, taken at N = 250–300, are
+converged; dx = 0.05 buys nothing except 14× the cost (1546 ns/cell-step at N = 720).
+
+### 🪤 I contaminated my own first attempt
+
+The first version of this table had N = 280 on a *different* initial condition. `BuildIC2D.jl` writes
+`ic2d_00-05_ev01.csv` with no dx in the filename, and I launched the dx = 0.05 IC build and the
+solver scan at the same time: the file was rewritten at 14:57:52, the N = 280 run had read the old
+dx = 0.125 version at 14:57:20, and everything from N = 400 on read the new one. The giveaway was the
+seeded T_max — 0.8629 for N = 280 against 0.8474 / 0.8480 / 0.8479 for the rest — and ε₂ jumping
+0.1657 → 0.1588 between two rows that should differ only by resolution. Re-run on a single IC, the
+sequence above is clean. Exactly the concurrency trap CLAUDE.md warns about, self-inflicted.
+
+⚠ **The IC filename does not encode dx.** Two builds at different spacings collide silently. The
+spacing *is* recorded in the `_meta.txt` (`grid = 561x561, dx=0.05`), so provenance is recoverable
+after the fact, but the collision is real.
+
+### The IC's own peak converges too, non-monotonically
+
+| IC dx | 0.25 | 0.15 | 0.125 | 0.10 | 0.05 |
+|---|---|---|---|---|---|
+| T_max [GeV] | 0.7516 | 0.8016 | 0.8656 | 0.8539 | **0.8483** |
+
+⚠ This is **not** a clean convergence sequence, and §6s overstated it as "still climbing". The
+density→T map's reference (the 0–5% ensemble φ-average) is rebuilt at each spacing, so the map moves
+with dx as well as the sampling. Taken together the values settle to ≈0.848 for dx ≤ 0.10, so
+dx = 0.125 is within 2% and dx = 0.25 is 11% low. ε₂ and ε₃ are unaffected at any spacing.
+
+### ⚠ `ic.nbad` is nonzero at fine solver resolution
+
+Seeding the single-event IC reports nbad = 8 / 0 / 16 / 40 / 32 at N = 200 / 280 / 400 / 560 / 720 —
+non-monotonic. **Harmless**: every cell ends with finite positive energy, charge is conserved to
+2.7e-6, and every run is admissible. It is the documented α runaway in the cold tail (§6d), where a
+finer grid samples more of the extreme tail and the fallback catches it. But G8 asserts
+`ic.nbad == 0`, which holds only at the resolutions it runs (N = 150, 250) on the ensemble IC — the
+assertion would not survive being applied to a single event at N ≥ 400.
+
+### All four physical events at dx = 0.05
+
+IC and solver both at dx = 0.05 (561² IC, N = 720 over ±18 fm), τ → 8, ~12 min each:
+
+| event | ε₂ | ε₃ | ε_p | v₃ | ε_p/ε₂ | v₃/ε₃ | max\|u\| | min(P+Π) | ΔQ/Q |
+|---|---|---|---|---|---|---|---|---|---|
+| ev01 | 0.1588 | 0.0936 | 0.05490 | 0.08748 | 0.346 | 0.935 | 1.72 | +2.9e-2 | 2.7e-6 |
+| ev02 | 0.0433 | 0.1143 | 0.03354 | 0.14011 | 0.775 | 1.226 | 1.74 | +3.1e-2 | 3.5e-6 |
+| ev03 | 0.2039 | 0.1311 | 0.10581 | 0.03679 | 0.519 | 0.281 | 1.71 | +3.1e-2 | 3.9e-6 |
+| ev04 | 0.0893 | 0.0815 | 0.07143 | 0.08497 | 0.800 | 1.043 | 1.63 | +3.1e-2 | 2.3e-6 |
+
+All admissible: max|u| 1.63–1.74, min(P+Π) > 0, charge to ≤3.9e-6, max|π|/P ≈ 1.0.
+
+⚠ The response ratios scatter far more than the ensemble's tight ε_p/ε₂ = 0.43–0.50 (§6k):
+0.35–0.80 here, and v₃/ε₃ spans 0.28–1.23. ev03 is the extreme — the largest ε₂ *and* the largest
+ε₃, but the **smallest** v₃. On a single event the harmonic planes need not align and the response
+is not a scalar times ε_n, so per-event ratios are not the ensemble response coefficient. This is
+the physics of event-by-event fluctuations, not a solver artefact — but it means a single event
+cannot be used to read off a response.
+
