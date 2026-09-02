@@ -163,7 +163,8 @@ Assemble `dU` for the conserved + advected state `U`. Returns `true`.
 """
 function rhs_2d!(dU::AbstractMatrix, U::AbstractMatrix, g::Grid2D, τ::Float64,
                  model::IdealDiffVisc2DModel, work::Work2D;
-                 bc::Symbol = :outflow, Emin::Float64 = E_FLOOR)
+                 bc::Symbol = :outflow, Emin::Float64 = E_FLOOR,
+                 force_first_order::Union{Nothing,BitVector} = nothing)
 
     apply_bc_2d!(U, g, model.layout; bc = bc)
 
@@ -187,9 +188,9 @@ function rhs_2d!(dU::AbstractMatrix, U::AbstractMatrix, g::Grid2D, τ::Float64,
     fill!(work.amax_tls, 0.0)
 
     _faces_2d!(work.Fhx, work.ULpx, work.URpx, work.ULcx, work.URcx,
-               U, g, τ, model, work, :x, Emin)
+               U, g, τ, model, work, :x, Emin, force_first_order)
     _faces_2d!(work.Fhy, work.ULpy, work.URpy, work.ULcy, work.URcy,
-               U, g, τ, model, work, :y, Emin)
+               U, g, τ, model, work, :y, Emin, force_first_order)
 
     # ---------------- 3. sources ----------------
     need_div = (L.hasNu && model.advect_nu) || (L.hasPi && model.advect_Pi) ||
@@ -242,6 +243,25 @@ function rhs_2d!(dU::AbstractMatrix, U::AbstractMatrix, g::Grid2D, τ::Float64,
     return true
 end
 
+"""
+    _floor_prim_2d!(Uc, col, L, Emin) -> PrimIdealVisc2D
+
+Write a valid VACUUM state into column `col` and return its primitives: matter at
+the energy floor, at rest, with no charge and no dissipative fields. Needed
+because `eos_Pne` underflows to `e = 0` at `T_MIN`, so the ordinary forward map
+rejects the state and the caller would otherwise have no flux to build.
+"""
+@inline function _floor_prim_2d!(Uc::AbstractMatrix, col::Int, L::StateLayout2D, Emin::Float64)
+    @inbounds begin
+        for a in 1:nvars(L)
+            Uc[a, col] = 0.0
+        end
+        Uc[L.iE, col] = Emin
+    end
+    return PrimIdealVisc2D(T_MIN, 0.0, 0.0, 0.0, 0.0, Emin, 0.0,
+                           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, true)
+end
+
 # ------------------------------------------------------------------------------
 # Face loop for one direction.
 #
@@ -258,7 +278,8 @@ function _faces_2d!(Fh::AbstractMatrix, ULp::AbstractMatrix, URp::AbstractMatrix
                     ULc::AbstractMatrix, URc::AbstractMatrix,
                     U::AbstractMatrix, g::Grid2D, τ::Float64,
                     model::IdealDiffVisc2DModel, work::Work2D,
-                    dir::Symbol, Emin::Float64)
+                    dir::Symbol, Emin::Float64,
+                    force_first_order::Union{Nothing,BitVector} = nothing)
 
     L = model.layout; eos = model.eos
     st = (dir === :x) ? g.Nytot : 1
@@ -279,22 +300,31 @@ function _faces_2d!(Fh::AbstractMatrix, ULp::AbstractMatrix, URp::AbstractMatrix
             nuxL, nuyL, PiL, pixxL, pixyL, piyyL, pietaL = dissipatives_at(U, i,  L)
             nuxR, nuyR, PiR, pixxR, pixyR, piyyR, pietaR = dissipatives_at(U, ip, L)
 
-            TL = exp(ULp[1,i]); μL = hq_mass(eos) + TL*ULp[2,i]
-            TR = exp(URp[1,i]); μR = hq_mass(eos) + TR*URp[2,i]
+            # MOOD: a face touching a flagged cell drops to piecewise-constant.
+            forced = force_first_order !== nothing &&
+                     (force_first_order[i] || force_first_order[ip])
 
-            okL, primL = prim_to_cons_2d!(ULc, i, TL, μL, ULp[3,i], ULp[4,i],
-                                          nuxL, nuyL, PiL, pixxL, pixyL, piyyL, pietaL,
-                                          τ, eos, L)
-            okR, primR = prim_to_cons_2d!(URc, i, TR, μR, URp[3,i], URp[4,i],
-                                          nuxR, nuyR, PiR, pixxR, pixyR, piyyR, pietaR,
-                                          τ, eos, L)
+            good = false
+            local primL, primR
+            if !forced
+                TL = exp(ULp[1,i]); μL = hq_mass(eos) + TL*ULp[2,i]
+                TR = exp(URp[1,i]); μR = hq_mass(eos) + TR*URp[2,i]
 
-            good = okL && okR &&
-                   ULc[L.iDtau,i] >= 0.0 && URc[L.iDtau,i] >= 0.0 &&
-                   ULc[L.iE,i]    >= Emin && URc[L.iE,i]    >= Emin
+                okL, primL = prim_to_cons_2d!(ULc, i, TL, μL, ULp[3,i], ULp[4,i],
+                                              nuxL, nuyL, PiL, pixxL, pixyL, piyyL, pietaL,
+                                              τ, eos, L)
+                okR, primR = prim_to_cons_2d!(URc, i, TR, μR, URp[3,i], URp[4,i],
+                                              nuxR, nuyR, PiR, pixxR, pixyR, piyyR, pietaR,
+                                              τ, eos, L)
+
+                good = okL && okR &&
+                       ULc[L.iDtau,i] >= 0.0 && URc[L.iDtau,i] >= 0.0 &&
+                       ULc[L.iE,i]    >= Emin && URc[L.iE,i]    >= Emin
+            end
 
             if !good
-                # first-order fallback from cell-centered primitives
+                # first-order fallback from cell-centered primitives (also the
+                # MOOD path when `forced`)
                 TLc = exp(work.yT[i]);  μLc = work.mu[i]
                 TRc = exp(work.yT[ip]); μRc = work.mu[ip]
                 okL, primL = prim_to_cons_2d!(ULc, i, TLc, μLc, work.ux[i], work.uy[i],
@@ -303,7 +333,26 @@ function _faces_2d!(Fh::AbstractMatrix, ULp::AbstractMatrix, URp::AbstractMatrix
                 okR, primR = prim_to_cons_2d!(URc, i, TRc, μRc, work.ux[ip], work.uy[ip],
                                               nuxR, nuyR, PiR, pixxR, pixyR, piyyR, pietaR,
                                               τ, eos, L)
-                okL && okR || continue      # leave the face flux at zero
+                if !(okL && okR)
+                    # ---- FLUID / VACUUM FACE ----
+                    # `continue` here leaves the flux at zero, which is a PERFECTLY
+                    # REFLECTING WALL: the fireball pours energy into its outermost
+                    # cell and none can leave. Measured on the production IC at
+                    # tau=8, that cell held E = 18.4 against 1.4 in its neighbour —
+                    # a 20x pile-up in one cell, and the origin of the temperature
+                    # spikes at the fluid-vacuum interface.
+                    #
+                    # The failure is only that `eos_Pne` underflows to e = 0 at
+                    # T_MIN, so `prim_to_cons_2d!` rejects the state. Give the
+                    # vacuum side an explicit FLOOR state instead and let HLLE run
+                    # normally: it then supplies its own upwinding and dissipation,
+                    # and the vacuum side contributes nothing. (Substituting the
+                    # fluid side's own flux instead — a one-sided flux with no
+                    # dissipation across a 13-order jump — is unstable: tried, and
+                    # E reached 4e17.)
+                    okL || (primL = _floor_prim_2d!(ULc, i, L, Emin))
+                    okR || (primR = _floor_prim_2d!(URc, i, L, Emin))
+                end
             end
 
             sL, sR = hlle_flux_2d!(Fh, i, ULc, URc, primL, primR, eos, τ, dir,

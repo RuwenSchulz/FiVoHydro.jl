@@ -1,0 +1,144 @@
+# ==============================================================================
+# test/test_unaveraged_ic2d.jl — GATE G8: the UN-AVERAGED production IC (F1).
+#
+# Every other gate runs either the azimuthally symmetric production profile or a
+# synthetic deformation. This one runs the real thing: the Pb+Pb 0-5% initial
+# condition built WITHOUT the φ-average, by
+# `Julia/Projects/ALICE_IC_Creation/BuildIC2D.jl`.
+#
+# That builder keeps the binary-collision midpoint VECTORS which
+# `MCGCollisionDensity.jl` reduces to radii before depositing `azimuthal_gauss`.
+# The φ-average in that one line is where the azimuthal information was being
+# destroyed — upstream of every solver, which is why
+# `data/initial_profiles_physical.csv` is `r, T0, alpha0`.
+#
+# The IC is a GENERATED artefact. If it is absent this gate skips rather than
+# fails; regenerate with
+#     julia --project=Julia Julia/Projects/ALICE_IC_Creation/BuildIC2D.jl
+#
+# ---------------------------------------------------------------------------
+# WHAT IS CHECKED
+#
+# There is still no oracle for a deformed IC, so this gate checks that the IC is
+# faithfully inherited and that the response is physical:
+#
+#   * the seeded state carries a real ε₂ (the whole point of F1);
+#   * momentum anisotropy is positive and BUILDS WITH TIME — spatial eccentricity
+#     converting to momentum anisotropy is the defining hydrodynamic response, and
+#     a solver that produced it instantly, or not at all, would be wrong;
+#   * it is resolution-stable;
+#   * conservation and admissibility hold as on every other IC.
+#
+# ⚠ The IC's NORMALISATION is inherited from the 1-D calibration via a
+# density -> T map, not re-derived in 2-D (BuildIC2D.jl header). It reproduces the
+# 1-D charm count to 0.2% and the central temperature exactly, but the pion yield
+# of a 2-D run built this way has NOT been checked against ALICE.
+# ==============================================================================
+
+using Printf
+using Test
+
+const _ROOT = normpath(joinpath(@__DIR__, ".."))
+include(joinpath(_ROOT, "main2D.jl"))
+using .hydro2d
+const H = hydro2d
+
+const IC2D = normpath(joinpath(_ROOT, "..", "Projects", "ALICE_IC_Creation",
+                               "PbPb", "data", "ic2d_00-05.csv"))
+const TAU0 = 0.4
+const THOT = 0.05
+
+function run_unaveraged(N, τf)
+    g = H.make_grid2d(N, N; xmax = 20.0, ymax = 20.0)
+    m = H.build_model_2d(; eos = H.LatticeHRGEOS(),
+        enable_shear = true, eta_over_s = 0.10, tauShear_coeff = 0.2, deltaShear_factor = 4/3,
+        enable_bulk  = true, zeta_over_s = 0.10, tauPi_coeff = 15.0,
+        enable_diff  = true, kappa_coeff = 0.1163, tauN_coeff = 1.0)
+    L = m.layout
+    U = H.allocate_state(g, m)
+    ic = H.initialize_from_grid_csv!(U, g, m, TAU0, IC2D)
+    ng = g.nghost
+
+    # spatial eccentricity of the SEEDED energy density, before evolution
+    sc = 0.0; ss = 0.0; sr = 0.0
+    for ix in (ng+1):(ng+g.Nx), iy in (ng+1):(ng+g.Ny)
+        i = H.lin(g, ix, iy); x = g.xC[ix]; y = g.yC[iy]
+        r = hypot(x, y); r < 1e-9 && continue
+        w = U[L.iE,i]*r^2; φ = atan(y, x)
+        sc += w*cos(2φ); ss += w*sin(2φ); sr += w
+    end
+    eps2_ic = sr > 0 ? hypot(sc, ss)/sr : 0.0
+
+    Q0 = 0.0
+    for ix in (ng+1):(ng+g.Nx), iy in (ng+1):(ng+g.Ny)
+        Q0 += U[L.iDtau, H.lin(g, ix, iy)]
+    end
+
+    res = H.run_sim_2d!(U, g, m; τ0 = TAU0, τfinal = τf, CFL = 0.15, CFLτ = 0.05)
+    @assert res.ok
+
+    Q1 = 0.0; sx = 0.0; sy = 0.0; maxu = 0.0; minPtot = Inf
+    for ix in (ng+1):(ng+g.Nx), iy in (ng+1):(ng+g.Ny)
+        i = H.lin(g, ix, iy); Q1 += U[L.iDtau, i]
+        exp(res.work.yT[i]) < THOT && continue
+        w = U[L.iE,i]
+        sx += w*res.work.ux[i]^2; sy += w*res.work.uy[i]^2
+        maxu = max(maxu, hypot(res.work.ux[i], res.work.uy[i]))
+        minPtot = min(minPtot, res.work.P[i] + H.phys_from_stored(U[L.iPi,i]))
+    end
+    ep = (sx + sy) > 0 ? (sx - sy)/(sx + sy) : 0.0
+    dQ = abs(Q1 - Q0)/abs(Q0)
+
+    @printf("  N=%3d tau=%.1f | ic bad=%d vacuum=%d | pf=%6d | T(0)=%.4f max|u|=%.3f | eps2(IC)=%.4f -> p-anisotropy=%+.5f (response %.3f) | dQ=%.2e\n",
+            N, res.τ, ic.nbad, ic.nvacuum, res.nprimfail,
+            exp(res.work.yT[H.lin(g, ng+g.Nx÷2, ng+g.Ny÷2)]), maxu,
+            eps2_ic, ep, ep/max(eps2_ic, 1e-12), dQ)
+    return (; eps2_ic, ep, dQ, maxu, minPtot, ic, res)
+end
+
+@testset "G8 — the un-averaged production IC" begin
+    if !isfile(IC2D)
+        @info "skipping G8: $(IC2D) absent. Regenerate with BuildIC2D.jl."
+        @test_skip false
+    else
+        a = run_unaveraged(150, 2.0)
+        b = run_unaveraged(150, 8.0)
+        c = run_unaveraged(250, 8.0)
+
+        # the IC is faithfully inherited: no cell with matter failed to seed
+        for r in (a, b, c)
+            @test r.ic.nbad == 0
+            @test r.res.nprimfail < 10_000
+            @test r.maxu < 3.0
+            @test r.minPtot > 0.0
+        end
+
+        # ---- charge: a MEASURED TRADE-OFF, not a free tolerance ----
+        # The vacuum cut and the density-gated ramp both delete charge at the cold
+        # edge, and the effect grows with resolution and time: at N=250, tau=8 the
+        # drift is ~3e-3 against ~5e-6 at N=150. Loosening the thresholds fixes it
+        # (2.1e-6 with T_vac_cut=0.02, n_lo=1e-9) but brings D6 straight back —
+        # measured, the elliptic IC then returns x<->y = 1.00 instead of 1e-13.
+        # So the loss is the PRICE of a stable charge sector. Assert tightly where
+        # the edge is well away from the fireball, loosely where it is not, and
+        # leave this comment so nobody "fixes" it by loosening the thresholds.
+        @test a.dQ < 1e-4          # N=150, tau=2
+        @test b.dQ < 1e-4          # N=150, tau=8
+        @test c.dQ < 2e-2          # N=250, tau=8 — edge-loss dominated
+        @printf("  charge drift: N=150 tau=2 %.2e | N=150 tau=8 %.2e | N=250 tau=8 %.2e\n",
+                a.dQ, b.dQ, c.dQ)
+
+        # it carries a REAL deformation — this is what F1 bought
+        @test a.eps2_ic > 0.05
+
+        # the hydrodynamic response: spatial eccentricity converts to momentum
+        # anisotropy, and it BUILDS with time rather than appearing instantly
+        @test a.ep > 0.0
+        @test b.ep > a.ep
+
+        # resolution stability of the response
+        @printf("  anisotropy at tau=8: N=150 %.5f, N=250 %.5f (%.2f%%)\n",
+                b.ep, c.ep, 100*abs(c.ep - b.ep)/b.ep)
+        @test abs(c.ep - b.ep)/b.ep < 0.05
+    end
+end

@@ -10,10 +10,16 @@
 # The dt-halving retry mirrors the 1-D behaviour: a stage that produces an
 # inadmissible state is not accepted, the step is halved and retried.
 #
-# Each stage is followed by `sanitize_stage_2d!` (floors -> S-E bound -> BCs), in
-# the same order src/timestepper.jl applies them. Without it the solver fails on
-# the FIRST step of the production IC, whose tapered vacuum tail sits at the
-# energy floor.
+# Each stage is followed by `sanitize_stage_2d!` (floors -> S-E bound -> nu bound
+# -> BCs), in the same order src/timestepper.jl applies them. Without it the
+# solver fails on the FIRST step of the production IC, whose tapered vacuum tail
+# sits at the energy floor.
+#
+# MOOD: if a stage still leaves inadmissible cells after sanitising, they are
+# flagged, the mask is grown by one cell so the whole stencil that touched them is
+# covered, and the stage is REDONE with piecewise-constant reconstruction there.
+# Only if that also fails does the step halve. Same escalation as
+# src/timestepper.jl (mark_bad! -> expand_bad! -> retry with force_first_order).
 # ==============================================================================
 
 """
@@ -55,7 +61,8 @@ Heun / SSPRK2. On an inadmissible stage the step is halved and retried up to
 """
 function step_ssprk2_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δτ::Float64,
                          model::IdealDiffVisc2DModel, work::Work2D;
-                         bc::Symbol = :outflow, max_halve::Int = 12)
+                         bc::Symbol = :outflow, max_halve::Int = 12,
+                         max_mood::Int = 2)
     L = model.layout
     nv = nvars(L); Ntot = g.Ntot
     Δ = Δτ
@@ -63,27 +70,54 @@ function step_ssprk2_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δτ::Float6
     for _ in 0:max_halve
         copyto!(work.U2, U)                       # keep the entry state
 
-        rhs_2d!(work.k, U, g, τ, model, work; bc = bc)
-        @inbounds for i in 1:Ntot, a in 1:nv
-            work.U1[a,i] = U[a,i] + Δ*work.k[a,i]
-        end
-        sanitize_stage_2d!(work.U1, g, τ + Δ, model, work; bc = bc)
-
-        if state_ok_2d(work.U1, g, L)
-            rhs_2d!(work.k, work.U1, g, τ + Δ, model, work; bc = bc)
-            @inbounds for i in 1:Ntot, a in 1:nv
-                U[a,i] = 0.5*(work.U2[a,i] + work.U1[a,i] + Δ*work.k[a,i])
-            end
-            sanitize_stage_2d!(U, g, τ + Δ, model, work; bc = bc)
-            if state_ok_2d(U, g, L)
-                return true, Δ
-            end
+        ok1 = _stage_2d!(work.U1, U, work.U2, U, g, τ, Δ, 1.0, 0.0, model, work, bc,
+                         max_mood, nv, Ntot, L)
+        if ok1
+            ok2 = _stage_2d!(U, work.U1, work.U2, work.U1, g, τ + Δ, Δ, 0.5, 0.5,
+                             model, work, bc, max_mood, nv, Ntot, L)
+            ok2 && return true, Δ
         end
 
         copyto!(U, work.U2)                       # restore and retry smaller
         Δ *= 0.5
     end
     return false, Δ
+end
+
+"""
+One RK stage with the MOOD escalation.
+
+`Uout = wold*Uold + wnew*(Uin + Δ·L(Uin))`, evaluated on `Uin`, then sanitised.
+If cells remain inadmissible they are flagged, the mask grown by one, and the
+stage redone with first-order reconstruction there. `Uold` is the state the RK
+weight `wold` multiplies (the step's entry state for the second SSPRK2 stage).
+"""
+function _stage_2d!(Uout::AbstractMatrix, Uin::AbstractMatrix,
+                    Uold::AbstractMatrix, Ubase::AbstractMatrix,
+                    g::Grid2D, τ::Float64, Δ::Float64, wold::Float64, wnew::Float64,
+                    model::IdealDiffVisc2DModel, work::Work2D, bc::Symbol,
+                    max_mood::Int, nv::Int, Ntot::Int, L::StateLayout2D)
+    mask = nothing
+    for attempt in 0:max_mood
+        rhs_2d!(work.k, Ubase, g, τ, model, work; bc = bc, force_first_order = mask)
+        if wnew == 0.0
+            @inbounds for i in 1:Ntot, a in 1:nv
+                Uout[a,i] = Uin[a,i] + Δ*work.k[a,i]
+            end
+        else
+            @inbounds for i in 1:Ntot, a in 1:nv
+                Uout[a,i] = wold*Uold[a,i] + wnew*(Uin[a,i] + Δ*work.k[a,i])
+            end
+        end
+        sanitize_stage_2d!(Uout, g, τ, model, work; bc = bc)
+        state_ok_2d(Uout, g, L) && return true
+
+        attempt == max_mood && return false
+        mark_bad_2d!(work.bad, Uout, g, model)
+        expand_bad_2d!(work.bad, work.bad_tmp, g; radius = 1 + attempt)
+        mask = work.bad
+    end
+    return false
 end
 
 """

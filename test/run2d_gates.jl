@@ -20,12 +20,16 @@ const GATES = [
     ("primitive recovery",                 "test_primrec2d.jl"),
     ("recovery vs 1-D on production locus","test_primrec2d_vs_1d.jl"),
     ("G0  Bjorken",                        "test_bjorken2d.jl"),
+    ("G1  Gubser (analytic 2-D)",           "test_gubser2d.jl"),
+    ("G1v Gubser viscous (semi-analytic)",  "test_gubser_viscous2d.jl"),
     ("G2  shear + bulk",                   "test_dissipation2d.jl"),
     ("G3  charge / diffusion",             "test_charge2d.jl"),
     ("G4  reproduction vs 1-D production", "test_reproduction2d.jl"),
     ("G5  production IC, all sectors",      "test_production_allsectors2d.jl"),
     ("G6  non-axisymmetric IC",             "test_elliptic2d.jl"),
     ("G7  dissipative sectors vs 1-D",      "test_dissipative_vs_1d.jl"),
+    ("G8  un-averaged production IC",       "test_unaveraged_ic2d.jl"),
+    ("G9  single-event (fluctuating) IC",   "test_fluctuating_ic2d.jl"),
 ]
 
 function main()

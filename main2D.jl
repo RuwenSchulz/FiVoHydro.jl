@@ -24,6 +24,7 @@ module hydro2d
 
 using Printf
 using SpecialFunctions
+using DelimitedFiles
 using Base.Threads
 
 const _SRC   = joinpath(@__DIR__, "src")
@@ -176,6 +177,75 @@ function initialize_from_radial!(U::AbstractMatrix, g::Grid2D, model::IdealDiffV
     return nbad
 end
 
+"""
+    initialize_from_grid_csv!(U, g, model, τ0, csv; taper_width=1.0)
+
+Seed from a genuinely 2-D initial condition: a CSV of `x,y,T0,alpha0` on a uniform
+grid, as written by `Julia/Projects/ALICE_IC_Creation/BuildIC2D.jl`.
+
+This is the IC that makes the solver worth having. Everything else in the ladder
+runs the production profile, which is azimuthally symmetric because the IC builder
+φ-averages every binary collision; `BuildIC2D.jl` keeps the collision midpoint
+vectors instead, so this file carries real ε₂.
+
+Bilinear interpolation onto the solver grid; outside the file's extent the state
+is vacuum, tapered over `taper_width` so the edge is not a step.
+
+Returns `(; nbad, nvacuum)` — cells that had matter and still failed, versus cells
+that were legitimately vacuum. Keeping those separate matters: a ±14 fm IC in a
+±20 fm box makes ~65% of the grid vacuum.
+"""
+function initialize_from_grid_csv!(U::AbstractMatrix, g::Grid2D,
+                                   model::IdealDiffVisc2DModel, τ0::Float64,
+                                   csv::AbstractString; taper_width::Float64 = 1.0)
+    raw = readdlm(csv, ','; skipstart = 1)
+    xs = sort(unique(Float64.(raw[:,1])))
+    ys = sort(unique(Float64.(raw[:,2])))
+    nx = length(xs); ny = length(ys)
+    @assert size(raw,1) == nx*ny "grid CSV is not a complete uniform grid"
+    Tg = zeros(nx, ny); Ag = zeros(nx, ny)
+    dx = xs[2]-xs[1]; dy = ys[2]-ys[1]
+    for row in 1:size(raw,1)
+        ix = round(Int, (Float64(raw[row,1]) - xs[1])/dx) + 1
+        iy = round(Int, (Float64(raw[row,2]) - ys[1])/dy) + 1
+        Tg[ix,iy] = Float64(raw[row,3]); Ag[ix,iy] = Float64(raw[row,4])
+    end
+
+    xlo, xhi = xs[1], xs[end]; ylo, yhi = ys[1], ys[end]
+    rmax_data = min(xhi, yhi)
+    tw = max(taper_width, 0.0)
+    rt0 = max(rmax_data - tw, 0.0)
+
+    @inline function bilin(A, x, y)
+        (x <= xlo || x >= xhi || y <= ylo || y >= yhi) && return 0.0
+        i = clamp(Int(floor((x - xlo)/dx)) + 1, 1, nx-1)
+        j = clamp(Int(floor((y - ylo)/dy)) + 1, 1, ny-1)
+        tx = (x - xs[i])/dx; ty = (y - ys[j])/dy
+        return (1-tx)*(1-ty)*A[i,j] + tx*(1-ty)*A[i+1,j] +
+               (1-tx)*ty*A[i,j+1]   + tx*ty*A[i+1,j+1]
+    end
+
+    # Count only cells that had MATTER and still failed. Cells beyond the file's
+    # extent are vacuum by construction — with a ±14 fm IC in a ±20 fm box that is
+    # ~65% of the grid, and reporting them as failures is the same vacuum/failure
+    # conflation that made an early production run look broken (TWOD_PROGRAM.md §6d).
+    nbad = 0; nvac = 0
+    for ix in 1:g.Nxtot, iy in 1:g.Nytot
+        x = g.xC[ix]; y = g.yC[iy]; r = hypot(x, y)
+        T = bilin(Tg, x, y); a = bilin(Ag, x, y)
+        if r > rt0 && tw > 0
+            w = 1.0 - smoothstep01_5((r - rt0)/tw)
+            T = max(w*T, T_MIN); a = w*a
+        end
+        T = max(T, T_MIN)
+        ok = set_cell!(U, lin(g, ix, iy), T, a, 0.0, 0.0, τ0, model)
+        ok && continue
+        T <= 10*T_MIN ? (nvac += 1) : (nbad += 1)
+    end
+    finalize_ic!(U, g, model; τ0 = τ0)
+    return (nbad = nbad, nvacuum = nvac)
+end
+
 # ------------------------------------------------------------------------------
 # Shear-constraint projection (gate G1)
 # ------------------------------------------------------------------------------
@@ -246,6 +316,14 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
     # one RHS pass to populate primitives and signal speeds before the first dt
     rhs_2d!(wk.k, U, g, τ0, model, wk; bc = bc)
 
+    # Charge at entry, for the drift diagnostic below.
+    Qin = 0.0
+    let L = model.layout, ng = g.nghost
+        @inbounds for ix in (ng+1):(ng+g.Nx), iy in (ng+1):(ng+g.Ny)
+            Qin += U[L.iDtau, lin(g, ix, iy)]
+        end
+    end
+
     τ = τ0
     nsteps = 0
     nprimfail = 0
@@ -262,8 +340,11 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
         ok, Δused = step(U, g, τ, Δ, model, wk; bc = bc)
         if !ok
             @warn "2-D step failed after dt halving" τ = τ Δ = Δused
+            # same NamedTuple shape as the success path, so a caller can read
+            # res.maxu / res.dQ without first testing res.ok
             return (ok = false, τ = τ, nsteps = nsteps, nprimfail = nprimfail,
-                    nvacuum = nvacuum, max_shear_res = max_shear_res, work = wk)
+                    nvacuum = nvacuum, max_shear_res = max_shear_res, work = wk,
+                    maxu = NaN, dQ = NaN, Q0 = Qin, Q1 = NaN)
         end
 
         τ += Δused
@@ -296,8 +377,35 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
 
     on_dump !== nothing && on_dump(τ, U, wk)
 
+    # ---- END-OF-RUN DIAGNOSTICS ----
+    # `ok` is NOT a statement that the run is physically trustworthy. It is
+    # `state_ok_2d`: every cell finite, E above the floor, D_tau non-negative. A
+    # single-event IC has satisfied all of that while |pi|/P ran to 1e12, max|u|
+    # reached 58 and 60% of the charge left the grid (TWOD_PROGRAM.md §6j) — the
+    # run "succeeded" by every criterion the solver had.
+    #
+    # So return the two numbers a caller needs to disbelieve it. Both are one pass
+    # over the interior and are computed once, at the end. Neither changes the
+    # evolution; `ok` keeps its meaning, it just no longer has to carry a job it
+    # was never doing.
+    # ⚠ `maxu` is over ALL interior cells, INCLUDING the dilute tail, where the
+    # fluid legitimately free-streams outward. It is therefore LARGER than the
+    # above-freeze-out figure the gates assert on: measured on ev02 at tau = 8,
+    # 3.46 here against 1.36 restricted to T > T_fo. Do not compare the two.
+    maxu = 0.0; Qout = 0.0
+    let L = model.layout, ng = g.nghost
+        @inbounds for ix in (ng+1):(ng+g.Nx), iy in (ng+1):(ng+g.Ny)
+            i = lin(g, ix, iy)
+            Qout += U[L.iDtau, i]
+            u = hypot(wk.ux[i], wk.uy[i])
+            u > maxu && (maxu = u)
+        end
+    end
+    dQ = abs(Qin) > 0 ? abs(Qout - Qin)/abs(Qin) : 0.0
+
     return (ok = true, τ = τ, nsteps = nsteps, nprimfail = nprimfail,
-            nvacuum = nvacuum, max_shear_res = max_shear_res, work = wk)
+            nvacuum = nvacuum, max_shear_res = max_shear_res, work = wk,
+            maxu = maxu, dQ = dQ, Q0 = Qin, Q1 = Qout)
 end
 
 end # module
