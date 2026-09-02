@@ -20,6 +20,7 @@ const GATES = [
     ("primitive recovery",                 "test_primrec2d.jl"),
     ("recovery vs 1-D on production locus","test_primrec2d_vs_1d.jl"),
     ("G0  Bjorken",                        "test_bjorken2d.jl"),
+    ("G0b Bjorken + nonlinear bulk",       "test_bjorken_bulk2d.jl"),
     ("G1  Gubser (analytic 2-D)",           "test_gubser2d.jl"),
     ("G1v Gubser viscous (semi-analytic)",  "test_gubser_viscous2d.jl"),
     ("Gs  sound speed + attenuation",      "test_sound2d.jl"),

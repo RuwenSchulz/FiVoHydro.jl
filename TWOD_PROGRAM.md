@@ -1762,3 +1762,97 @@ is not a scalar times ε_n, so per-event ratios are not the ensemble response co
 the physics of event-by-event fluctuations, not a solver artefact — but it means a single event
 cannot be used to read off a response.
 
+---
+
+## 6u. Nonlinear bulk (G0b), and the P9 19% decomposed
+
+### G0b — bulk beyond the linear regime
+
+The bulk sector's only quantitative check was gate Gs, which is *linear* (a 1e-4 perturbation about a
+uniform background), and Gubser cannot help because it is conformal. **G0 never exercised bulk at
+all.** `test_bjorken_bulk2d.jl` closes that: Bjorken flow reduces the solver's bulk sector to
+
+    de/dτ = −(e + P + Π)/τ ,   dΠ/dτ = (−Π − ζ/τ)/τ_Π
+
+(the code's law is τ_Π DΠ + Π = −ζθ with **no** δ_ΠΠ term — read off `dissipation2d.jl`, not
+assumed), integrated by RK4 far below the solver's tolerance. Started at T₀ = 0.30 and run to τ = 6
+so Bjorken cooling carries the system **through the ζ Lorentzian peak at T = 0.175** — a bulk test
+that never enters the bulk regime is not one.
+
+| ζ/s | T vs reference | Π vs reference | \|Π\|/P | x,y spread |
+|---|---|---|---|---|
+| 0.05 | 9.90e-5 | 5.20e-3 | 0.066 | 0.0 |
+| 0.15 | 9.93e-5 | 7.51e-3 | 0.236 | 0.0 |
+| 0.30 | 3.53e-5 | 1.57e-3 | **0.600** | 0.0 |
+
+**Sub-percent at |Π|/P = 0.6**, and transverse uniformity is *exact* (0.0, not merely small).
+Convergence in the timestep, ζ/s = 0.15:
+
+| CFL | 0.20 | 0.10 | 0.05 | 0.025 |
+|---|---|---|---|---|
+| \|ΔT\|/T | 1.42e-4 | 4.92e-5 | 1.16e-5 | 2.17e-5 |
+| \|ΔΠ\|/Π | 9.72e-3 | 5.00e-3 | 2.17e-3 | **9.34e-4** |
+
+The reference calls the solver's own `bulk_coeffs_2d`, so this gate tests the **dynamics** — the
+implicit relaxation, its back-reaction on the energy equation, the resulting entropy production —
+not the coefficient formulas, which Gs already pins to ~1%. It also asserts dP/dμ = 0 (verified to
+1e-12) since that is what makes T(e) a one-dimensional inversion.
+
+### P9: the 19% is now decomposed, and only one third of it was mine
+
+The decisive measurement is my Cooper–Frye against **Fluidum's own `spectra_internal`, on one and
+the same surface**:
+
+| | dN_π/dy |
+|---|---|
+| my Cooper–Frye | 1189.89 |
+| Fluidum's | 1182.43 |
+| **ratio** | **1.0063** |
+
+**The two agree to 0.63%.** So the CF conventions — statistics, feed-down factor 2.0×2.5, phase
+space, (2πħc)³ — are right, and the 19% is not there. (The sign of mine is negative: my surface
+normal orientation is the opposite convention. Magnitudes are what is compared.)
+
+That splits the gap three ways:
+
+| piece | ratio | |
+|---|---|---|
+| CF conventions | 1.0063 | 0.6% — correct |
+| my 2-D τ_fo(x,y) surface vs the 1-D contour | 0.914 | **8.6% — a defect of mine** |
+| IC + solver | 0.883 | 11.7% — a genuine setup difference |
+
+and 0.914 × 0.883 × 1.006 = 0.812, the observed ratio.
+
+**🔴 The surface defect, fixed.** `pion_yield` skipped any cell whose neighbours had not frozen, to
+avoid a NaN gradient. That discards the **outer rim of the surface**, which is exactly where dΣ is
+largest (nearly parallel to the time axis). Replaced by one-sided differences at the rim: the yield
+goes 1087.4 → **1171.3** at N = 200 and **1183.9** at N = 300, i.e. **−0.50%** against the contour,
+from −8.6%.
+
+**The remaining 11.7% is not an error.** `TemperatureCalibration.jl` runs Pb+Pb through
+`:fluidum`, and `_run_fluidum` **floors the initial condition at T_fo** — the whole cold tail sits
+*on* the isotherm, giving a materially larger fireball, and Fluidum's own tracker (not an isotherm
+scan) defines the edge, because against a constant-T_fo tail the isotherm is not well defined. The
+FiVo path floors far below T_fo. So my axisymmetric "control" was never the same physical setup as
+the calibration. **A 2-D re-derivation of `Norm` would legitimately differ**, and the size of that
+difference is the ~12% above, not 19%.
+
+⚠ **A τ-sampling bias remains in the absolute yield.** Refining dτ from 0.05 to 0.02 at N = 300
+moves the yield 1183.9 → 1172.9 (−0.9%): a cell is recorded as frozen at the first *sampled* τ below
+T_fo, so coarse sampling places the surface systematically late. The comparison above is at matched
+dτ = 0.05 on both sides, so it is like-for-like; the dτ → 0 limit needs both refined together.
+
+### Where the sectors stand now
+
+| sector | best quantitative check | agreement |
+|---|---|---|
+| ideal | Bjorken, Gubser (2nd order), c_s | 1e-4 … 0.05% |
+| shear | viscous Gubser (2nd order), π vs IS target, attenuation | 0.02% … 0.3% |
+| **bulk** | **G0b nonlinear at \|Π\|/P = 0.6**, plus Gs attenuation | **0.09% … 0.75%** |
+| charge | Fick on uniform T; 1-D limit exact | 2% |
+
+⚠ **Charge is the one still standing where it was.** It has no analytic 2-D test *with flow*: the
+Fick check is on a static uniform background (2%), and the 1-D reduction is exact but 1-D. The
+concrete next step is Gubser advection — with κ = 0 the charge obeys ∂_μ(nu^μ) = 0 on a known
+non-trivial 2-D flow, so n̂ ∝ 1/cosh²ρ is an exact reference for the transport at second order.
+

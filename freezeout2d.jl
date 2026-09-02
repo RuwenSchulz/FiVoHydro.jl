@@ -112,6 +112,19 @@ function freeze_surface(tag; N = 200, box = 18.0, dτ = 0.05, τmax = 16.0,
     return (; xs, ys, τfo, uxf, uyf, dx = g.dx, nhot, nfroze, refroze)
 end
 
+"""Central difference where both neighbours froze, one-sided where only one did,
+NaN only if neither did."""
+@inline function grad1(A, a, b, dir, dx)
+    lo = dir == 1 ? A[a-1, b] : A[a, b-1]
+    hi = dir == 1 ? A[a+1, b] : A[a, b+1]
+    c  = A[a, b]
+    if !isnan(lo) && !isnan(hi); return (hi - lo)/(2dx)
+    elseif !isnan(hi);           return (hi - c)/dx
+    elseif !isnan(lo);           return (c - lo)/dx
+    else;                        return NaN
+    end
+end
+
 """Cooper-Frye on tau = tau_fo(x,y). Returns (N_boltzmann, N_bose, neg_fraction)."""
 function pion_yield(s; nη = 40, npt = 40, nφ = 24, ηmax = 6.0)
     xs, ys, τfo, uxf, uyf, dx = s.xs, s.ys, s.τfo, s.uxf, s.uyf, s.dx
@@ -125,11 +138,15 @@ function pion_yield(s; nη = 40, npt = 40, nφ = 24, ηmax = 6.0)
         acc = 0.0; accB = 0.0; neg = 0.0; pos = 0.0
         for b in 2:(ny-1)
             isnan(τfo[a,b]) && continue
-            # gradients of tau_fo; skip a cell whose neighbours never froze
-            (isnan(τfo[a-1,b]) || isnan(τfo[a+1,b]) ||
-             isnan(τfo[a,b-1]) || isnan(τfo[a,b+1])) && continue
-            dxt = (τfo[a+1,b] - τfo[a-1,b])/(2dx)
-            dyt = (τfo[a,b+1] - τfo[a,b-1])/(2dx)
+            # ONE-SIDED at the rim, not skipped. Discarding every cell with a
+            # neighbour that never froze throws away the outer ring of the
+            # surface - and that ring carries a large share of the area, because
+            # dSigma there is nearly parallel to the time axis. Measured: skipping
+            # it cost 8.6% of the yield (1087.4 against 1189.9 from the same run
+            # integrated as a 1-D contour instead).
+            gx = grad1(τfo, a, b, 1, dx); gy = grad1(τfo, a, b, 2, dx)
+            (isnan(gx) || isnan(gy)) && continue
+            dxt = gx; dyt = gy
             τ = τfo[a,b]; ux = uxf[a,b]; uy = uyf[a,b]
             uτ = sqrt(1 + ux*ux + uy*uy)
             for pt in ptg
@@ -169,4 +186,6 @@ function main()
                 tag, NB, Nb, negf, time()-t0); flush(stdout)
     end
 end
-main()
+if abspath(PROGRAM_FILE) == (@__FILE__)
+    main()
+end
