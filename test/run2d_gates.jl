@@ -22,6 +22,7 @@ const GATES = [
     ("G0  Bjorken",                        "test_bjorken2d.jl"),
     ("G1  Gubser (analytic 2-D)",           "test_gubser2d.jl"),
     ("G1v Gubser viscous (semi-analytic)",  "test_gubser_viscous2d.jl"),
+    ("Gs  sound speed + attenuation",      "test_sound2d.jl"),
     ("G2  shear + bulk",                   "test_dissipation2d.jl"),
     ("G3  charge / diffusion",             "test_charge2d.jl"),
     ("G4  reproduction vs 1-D production", "test_reproduction2d.jl"),

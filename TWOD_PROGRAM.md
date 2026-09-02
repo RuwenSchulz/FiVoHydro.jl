@@ -1351,3 +1351,54 @@ After all three, π̄ agrees pointwise at **1–3%** and T at **0.06%** at N = 2
 **14/14.** The analytic coverage is now: Bjorken (G0), ideal Gubser (G1), **viscous Gubser (G1v)**,
 sound speed and attenuation, the two Milne conservation identities, and the second law.
 
+---
+
+## 6n. BULK VISCOSITY vs THEORY (Gs) — the last untested sector
+
+Gubser is conformal, so no exact solution can constrain ζ: G2 and the 1-D comparison only check the
+bulk sector against another implementation. Sound does constrain it —
+Γ = ½k²[(4/3)η + ζ]/(e+P) — so running with η = 0 isolates it.
+
+### 🔴 ζ is a Lorentzian, not (ζ/s)·s
+
+`SimpleBulkViscosity` is peaked at T = 0.175 GeV with width 0.024:
+ζ = ζs_peak/(1 + ((T−0.175)/0.024)²)·invfmGeV·s. **At the shear gate's background (T = 0.35) that
+factor is 1/54 = 0.018** — bulk is effectively switched off there. The test therefore runs *on* the
+peak.
+
+### Magnitude, at T = 0.175
+
+| ζ/s | Γ − floor | Navier–Stokes | ratio |
+|---|---|---|---|
+| 0.02 | 0.01258 | 0.01237 | **1.018** |
+| 0.05 | 0.03156 | 0.03091 | **1.021** |
+| 0.10 | 0.06402 | 0.06183 | **1.035** |
+
+### Temperature dependence — the Lorentzian shape, not just its normalisation
+
+| T₀ | lorentz(T₀) | ⟨lorentz⟩ | Γ − floor | ratio using T₀ | ratio using ⟨lorentz⟩ |
+|---|---|---|---|---|---|
+| 0.175 | 1.0000 | 0.9657 | 0.03156 | 1.021 | **1.057** |
+| 0.190 | 0.7191 | 0.8473 | 0.02587 | 1.263 | **1.072** |
+| 0.210 | 0.3198 | 0.4174 | 0.01156 | 1.404 | **1.075** |
+| 0.250 | 0.0929 | 0.1170 | 0.00273 | 1.356 | **1.076** |
+
+⚠ The middle column is a trap I fell into: ζ changes by 3× across the Lorentzian's width and the
+Bjorken background **cools ~4% during the run**, so evaluating the Lorentzian at the *initial*
+temperature is wrong — at T₀ = 0.175 the run drifts off the peak, at T₀ = 0.21 it drifts toward it.
+That produced a ratio rising 1.02 → 1.40 with T₀, which is the drift and not the solver. With the
+run-averaged factor the ratio is **constant at 1.057–1.076 across a factor of 8.5 in ζ**.
+
+That constancy is the point: a coefficient error would scale with ζ, a background effect does not.
+The residual ~7% is the same offset the shear channel shows (1.073/1.072/1.071 at η/s =
+0.01/0.02/0.04), i.e. the Bjorken expansion θ = 1/τ that the static dispersion relation omits.
+
+**Both dissipative sectors are now quantitatively confirmed against theory to ~7%**, and the sound
+speed to 0.55%.
+
+### Gate
+
+`test_sound2d.jl` (Gs) folds all three into the ladder: sound speed, shear attenuation linear in
+η/s with a constant ratio, and bulk attenuation at two points on the Lorentzian with the ratio
+required to be the same at both — so the temperature dependence is gated, not just the magnitude.
+
