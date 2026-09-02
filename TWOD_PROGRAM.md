@@ -1402,3 +1402,89 @@ speed to 0.55%.
 η/s with a constant ratio, and bulk attenuation at two points on the Lorentzian with the ratio
 required to be the same at both — so the temperature dependence is gated, not just the magnitude.
 
+---
+
+## 6o. Sub-percent: how far it goes, and where it stops
+
+The sound gate's ~7% was attributed to the Bjorken background. That is a sharp prediction — the
+offset must fall like 1/τ₀ — and it half holds:
+
+| τ₀ | 20 | 40 | 80 | 160 | 320 |
+|---|---|---|---|---|---|
+| excess in Γ | 11.07% | 7.15% | 5.05% | 3.96% | 3.41% |
+| c_s error | 0.933% | 0.433% | 0.176% | 0.046% | **0.020%** |
+
+The c_s error vanishes cleanly: **the ideal sector reaches sub-percent, and then two more decades**.
+Γ does not — it fits **excess = 2.86% + 176/τ₀ %**, a 1/τ₀ piece on top of a constant.
+
+That constant survives everything:
+
+| excluded | evidence |
+|---|---|
+| resolution | 3.83 / 3.96 / 4.07% at N = 96 / 128 / 192 (converged, rising slightly) |
+| timestep / operator splitting | 1.0396 / 1.0397 at CFL = 0.15 / 0.075 |
+| perturbation amplitude | 1.0397 / 1.0396 at 1e-4 / 1e-3 |
+| relaxation time | saturates at 1.040 as τ_π → 0 (Cs = 0.05 / 0.2 / 0.8 → 1.0244 / 1.0396 / 1.0404) |
+| the background estimator | fitting Γ against k² puts the background in the intercept; slope still gives **1.0337** |
+| the entropy definition | mine vs the code's: 92.270229 both, ratio 1.000000 |
+
+and the constitutive relation is right by hand: the code's `ns_shear_target_2d` is π_NS = −2ησ, and
+for Bjorken that gives the textbook −(4/3)η/τ.
+
+**So the realized shear viscosity is ~3.4–4.0% above (4/3)(η/s)s/(e+P).** That is a normalisation
+question about what η the code intends, and `viscosity()` is shared with the 1-D production solver —
+so it is not a 2-D bug to fix here. Sub-percent on the dissipative coefficients needs that decision
+first.
+
+---
+
+## 6p. P9 — a 2-D freeze-out surface and Cooper-Frye yield
+
+`freezeout2d.jl`. The surface is boost-invariant and parameterised as τ = τ_fo(x,y), the last time
+each transverse cell crosses T_fo downwards, with
+dΣ_μ = τ_fo(1, −∂_xτ_fo, −∂_yτ_fo, 0) dx dy dη. Conventions taken from the 1-D calibration:
+T_fo = 0.156, m_π = 0.138, p_T ∈ [0.1, 5.0], `pion_yield_factor` = 2.0×2.5.
+
+⚠ **(ħc)³**: dΣ_μp^μ carries fm³·GeV and d³p/E carries GeV², so the measure is (2πħc)³, not (2π)³.
+Omitting it returned dN/dy = 8.8 instead of ~1300.
+
+### Yields
+
+| class | dN_π/dy | ratio to 0–5% |
+|---|---|---|
+| 0–5% | 1266.0 | 1.000 |
+| 5–10% | 1020.4 | 0.806 |
+| 10–20% | 761.1 | 0.601 |
+| 20–30% | 513.6 | 0.406 |
+| 30–40% | 338.4 | 0.267 |
+| 40–50% | 227.2 | 0.179 |
+
+Bose statistics; Boltzmann runs 12% lower throughout. Negative-dΣ·p contributions are ≤0.06%.
+
+### 🔴 The inherited normalisation does NOT carry over
+
+The control is the 2-D solver seeded from the *same* radial profile the 1-D calibration used
+(`initial_profiles_physical.csv`), run through the *same* Cooper-Frye:
+
+**axisymmetric control 1087.4 against the 1-D calibration's 1339.63 — a ratio of 0.812.**
+
+So a 2-D re-derivation of `Norm` would land ~23% above the inherited value. That is the number P9
+was asking for, and it says the caveat in `BuildIC2D.jl`'s header is real and quantified rather than
+hypothetical.
+
+⚠ It is **not yet attributed**. Candidates, none excluded: the 1-D calibration ran through Fluidum's
+`spectra_internal`, not this Cooper-Frye, so the two may differ in feed-down or statistics
+conventions; the 1-D profile is tapered (`taper_width = 1.0`) while the 2-D IC carries its own cold
+tail; and this surface omits δf. Until one of those is pinned down, **quote the ratio, not the
+absolute yield.**
+
+### What is trustworthy now
+
+The *shape* — the ratios above are independent of the overall normalisation, and they are the
+quantity to compare against ALICE's measured centrality dependence. I have not done that comparison
+here because it needs the published table rather than a recalled number.
+
+⚠ 335–405 cells per run re-heat above T_fo after first freezing (3.6–5.0% of the hot cells), which a
+single-valued τ_fo(x,y) cannot represent — the 2-D analogue of the non-bijective-contour problem
+`FreezeOutContour.jl` documents in 1-D. Reported by the script rather than assumed away.
+
