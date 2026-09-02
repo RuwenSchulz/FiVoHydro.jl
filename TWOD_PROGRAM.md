@@ -1406,6 +1406,14 @@ required to be the same at both — so the temperature dependence is gated, not 
 
 ## 6o. Sub-percent: how far it goes, and where it stops
 
+> 🔴 **RETRACTED 2026-09-02 — see §6q.** The conclusion below, that "the realized shear viscosity is
+> ~3.4–4.0% above (4/3)(η/s)s/(e+P)" and that this is a normalisation question about a function
+> shared with the 1-D solver, is **WRONG**. The 4% was my sound-wave *initialisation* exciting the
+> backward mode, not the solver. Measured directly, π matches its target to 0.02%, and with the exact
+> eigenmode the damping matches theory to 0.2–0.3%. The scans below are still correct as measurements
+> — they are what established that the effect is independent of resolution, timestep, amplitude, τ_π
+> and τ₀, which is precisely why it looked like a coefficient error. Kept in place, dated.
+
 The sound gate's ~7% was attributed to the Bjorken background. That is a sharp prediction — the
 offset must fall like 1/τ₀ — and it half holds:
 
@@ -1487,4 +1495,63 @@ here because it needs the published table rather than a recalled number.
 ⚠ 335–405 cells per run re-heat above T_fo after first freezing (3.6–5.0% of the hot cells), which a
 single-valued τ_fo(x,y) cannot represent — the 2-D analogue of the non-bijective-contour problem
 `FreezeOutContour.jl` documents in 1-D. Reported by the script rather than assumed away.
+
+---
+
+## 6q. The 4% was mine, not the solver's — sub-percent reached
+
+§6o reported a hard ~4% floor in the sound attenuation and concluded the realized η was 4% high.
+That was wrong, and the way it was wrong is worth keeping.
+
+### What the scans could not see
+
+The excess was independent of resolution, timestep, amplitude, τ_π, τ₀ and the estimator, and it was
+**the same 1.0345 for η/s = 0.01, 0.02 and 0.04**. A coefficient error looks exactly like that. What
+it actually was: the initialisation used the *ideal* eigenvector — δu in phase with δT, and π = 0 —
+which is wrong at O(Γ/ω) ≈ 1.5%. That residue excites the backward-propagating mode, |c(τ)| beats,
+and a straight-line fit to log|c| returns a window average. **The eigenvector error scales with η,
+and Γ scales with η, so the ratio is η-independent** — which is why every scan came back flat.
+
+### What caught it
+
+Measuring π **directly** against its target instead of through the dispersion relation:
+
+| η/s | \|π^xx\| / \|−2ησ^xx\| | phase offset | ωτ_π |
+|---|---|---|---|
+| 0.01 | **0.99978** | 0.90° | 0.0158 rad = 0.90° |
+| 0.02 | **0.99947** | — | — |
+| 0.04 | **0.99856** | — | — |
+
+π = 2ησ/(1 − iωτ_π), textbook Israel–Stewart, to 0.02%. Alongside: the regulator was **off**
+(`pi_clip_factor = −1`), |π^xx|/P was 1.8e-4 – 7e-4 so nothing was near clipping, and transverse
+momentum was conserved to **7e-12 – 1.2e-11** on the periodic box. The solver was never the problem.
+
+The confirming symptom: splitting the fit window in three gave apparent ratios **1.275 / 0.484 /
+0.918** — not a decaying exponential at all, but beats.
+
+### Sub-percent, with the exact eigenmode
+
+δu from ω/(wk) with the complex ω of the IS dispersion, and δπ from the IS response:
+
+| η/s | ideal eigenvector | exact eigenmode | half-window split, ideal → exact |
+|---|---|---|---|
+| 0.01 | 1.03454 | **1.00337** | 0.089 → **0.0018** |
+| 0.02 | 1.03466 | **1.00301** | 0.067 → **0.0019** |
+| 0.04 | 1.03442 | **1.00213** | 0.023 → **0.0019** |
+
+The half-split is the diagnostic that separates the two hypotheses: a genuine coefficient error
+leaves the decay exponential, mode contamination does not.
+
+### Gate Gs, now at τ₀ = 320 with the exact eigenmode
+
+| quantity | agreement |
+|---|---|
+| sound speed | **0.05%** |
+| shear attenuation, η/s = 0.01 / 0.02 / 0.04 | **1.00330 / 1.00287 / 1.00168** |
+| bulk attenuation, T = 0.175 / 0.210 | **0.995 / 0.990** |
+| half-window split | 0.005 |
+
+**Every sector now agrees with theory at or below 1%**, and the gate asserts it: ratios in
+[0.98, 1.02] for shear and a half-split below 0.01, so a future change that reintroduces either a
+coefficient error or mode contamination fails.
 

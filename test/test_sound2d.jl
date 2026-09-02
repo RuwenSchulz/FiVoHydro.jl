@@ -32,14 +32,43 @@
 #    value instead made the ratio drift 1.02 -> 1.40 with T0, which is the drift
 #    and not the solver.
 #
-# The residual ~7% excess is the Bjorken expansion (theta = 1/tau) that the static
-# dispersion relation omits; it is the same for shear and for bulk, and constant
-# across a factor of 8 in zeta, which is what identifies it as a background effect
-# rather than a coefficient error.
+# ---------------------------------------------------------------------------
+# THE MODE MUST BE THE EXACT VISCOUS EIGENMODE, and this is the whole ballgame.
+#
+# Initialising with the IDEAL eigenvector -- delta u in phase with delta T, and
+# pi = 0 -- is wrong at O(Gamma/omega) ~ 1.5%, and that residue excites the
+# BACKWARD-propagating mode. |c(tau)| then BEATS, and a straight-line fit to
+# log|c| returns a window average rather than Gamma. Measured in sub-windows the
+# apparent Gamma swung 1.28 / 0.48 / 0.92 while the full-window fit averaged to
+# 1.035.
+#
+# The trap is that the eigenvector error scales with eta and Gamma scales with eta
+# too, so the RATIO is eta-independent: the excess sat at a stubborn 1.0345 for
+# eta/s = 0.01, 0.02 and 0.04, and survived scans in resolution, timestep,
+# amplitude, tau_pi, tau0 and the estimator. It looked exactly like a coefficient
+# error, and for a while I reported it as one -- "the realized eta is 4% above
+# (4/3)(eta/s)s". That was WRONG.
+#
+# What settled it was measuring pi DIRECTLY against its target rather than through
+# the dispersion relation: |pi^xx| / |-2 eta sigma^xx| = 0.99978 / 0.99947 /
+# 0.99856, with a phase offset of exactly omega*tau_pi. The constitutive relation
+# was never off by 4%. With the exact eigenmode (delta u from omega/(w k), delta
+# pi from the IS relation) the damping matches theory to 0.2-0.34% and the
+# half-window split collapses from 0.09 to 0.002.
+#
+# Other things that had to be right, learned earlier:
+#  * TRAVELLING, not standing: cos(kx) with u = 0 is two counter-propagating
+#    modes and the phase never advances. That measured c_s = 0.13 against 0.54.
+#  * NATURAL UNITS: eta = (eta/s) s [fm^-3], (e+P)[fm^-4] = (e+P)[GeV/fm^3] *
+#    invfmGeV. Mixing them inflates the prediction by invfmGeV^2 = 26.
+#  * zeta IS A LORENTZIAN peaked at T = 0.175 GeV, width 0.024 -- at T = 0.35 it
+#    is 1.8% of peak, so the bulk test runs ON the peak, and the background cools
+#    along it during the run, so the prediction uses the run-averaged factor.
 # ==============================================================================
 
 using Printf
 using Test
+using LinearAlgebra
 
 const _ROOT = normpath(joinpath(@__DIR__, ".."))
 include(joinpath(_ROOT, "main2D.jl"))
@@ -48,11 +77,30 @@ const H = hydro2d
 
 const INVFMGEV = 1/0.1973269804
 const ALPHA = -6.0
-const TAU0  = 40.0        # large, so theta = 1/tau is small against omega
+# tau0 = 320: the Bjorken background contributes an excess that falls like 1/tau0
+# (measured 11.07 / 7.15 / 5.05 / 3.96 / 3.41 % at tau0 = 20 / 40 / 80 / 160 /
+# 320), so pushing it out is what makes sub-percent reachable at all.
+const TAU0  = 320.0
 const AMP   = 1e-3
 const LBOX  = 6.0
 
 lorentz(T) = 1/(1 + ((T - 0.175)/0.024)^2)
+
+"""Sound root of the IS dispersion (omega^2 - cs^2 k^2)(1 - i w tau) + i w D k^2 = 0."""
+function sound_root(k, cs2, D, τR)
+    if τR <= 1e-12
+        disc = cs2*k^2 - (D*k^2/2)^2
+        return sqrt(max(disc, 0.0)) - im*(D*k^2/2)
+    end
+    c = [(-im*cs2*k^2), (-(τR*cs2*k^2 + D*k^2)), im] ./ τR
+    C = [0 0 -c[1]; 1 0 -c[2]; 0 1 -c[3]]
+    best = nothing
+    for w in eigvals(C)
+        real(w) > 1e-9 || continue
+        (best === nothing || imag(w) > imag(best)) && (best = w)
+    end
+    return best
+end
 
 """One sound run; returns c_s, Gamma and the run-averaged Lorentzian factor."""
 function sound(T0, ηs, ζs; N = 128, τrun = 12.0, dτ = 0.5)
@@ -70,10 +118,25 @@ function sound(T0, ηs, ζs; N = 128, τrun = 12.0, dτ = 0.5)
     _, _, ep = H.eos_Pne(T0+hT, ALPHA*(T0+hT), m.eos)
     _, _, em = H.eos_Pne(T0-hT, ALPHA*(T0-hT), m.eos)
     dedT = (ep-em)/(2hT)
+    # THE EXACT VISCOUS EIGENMODE (see the header). delta u carries the complex
+    # phase of omega, and delta pi is the IS response; both vanish smoothly as the
+    # viscosity goes to zero, so the ideal run is unaffected.
+    s0 = (e0+P0-ALPHA*T0*n0)/T0
+    w_nat = (e0+P0)*INVFMGEV
+    ηv = ηs*s0
+    ζv = ζs*lorentz(T0)*s0
+    D  = ((4/3)*ηv + ζv)/w_nat
+    τR = ηs > 0 ? 5*ηs/(T0*INVFMGEV) : 0.0
+    ω  = sound_root(k, cs2, D, τR)
+    δe_c = dedT*AMP*T0*INVFMGEV
+    δu_c = ω*δe_c/(w_nat*k)
+    δπ_c = ηv > 0 ? -(4/3)*ηv*(im*k*δu_c)/(1 - im*ω*τR) : 0.0+0.0im
     for ix in 1:g.Nxtot, iy in 1:g.Nytot
-        δT = AMP*T0*cos(k*g.xC[ix])
-        H.set_cell!(U, H.lin(g,ix,iy), T0 + δT, ALPHA,
-                    sqrt(cs2)*(dedT*δT)/(e0+P0), 0.0, TAU0, m)
+        ph = cis(k*g.xC[ix])
+        δT = AMP*T0*real(ph)
+        pxx = real(δπ_c*ph)/INVFMGEV
+        H.set_cell!(U, H.lin(g,ix,iy), T0 + δT, ALPHA, real(δu_c*ph), 0.0, TAU0, m;
+                    pixx = pxx, piyy = -pxx/2, pixy = 0.0)
     end
     H.finalize_ic!(U, g, m; τ0 = TAU0)
     ng = g.nghost; iy0 = ng + g.Ny÷2 + 1
@@ -100,9 +163,10 @@ function sound(T0, ηs, ζs; N = 128, τrun = 12.0, dτ = 0.5)
     end
     fit(x,y) = (n=length(x); mx=sum(x)/n; my=sum(y)/n;
                 sum((x.-mx).*(y.-my))/sum((x.-mx).^2))
-    s0 = (e0+P0-ALPHA*T0*n0)/T0
-    return (; Γ = -fit(ts,la), cs = -fit(ts,ph)/k, cs_exact = sqrt(cs2),
-              k, eP_nat = (e0+P0)*INVFMGEV, s0, lorbar = sum(lor)/length(lor))
+    nn = length(ts)
+    Γ1 = -fit(ts[1:nn÷2], la[1:nn÷2]); Γ2 = -fit(ts[nn÷2:nn], la[nn÷2:nn])
+    return (; Γ = -fit(ts,la), Γ1, Γ2, cs = -fit(ts,ph)/k, cs_exact = sqrt(cs2),
+              k, eP_nat = w_nat, s0, lorbar = sum(lor)/length(lor))
 end
 
 @testset "Gs — sound speed and attenuation" begin
@@ -116,18 +180,24 @@ end
     @test abs(base.Γ) < 5e-3        # numerical damping floor must be small
 
     # ---------- SHEAR: Gamma must be linear in eta/s with the NS coefficient ----------
-    rats = Float64[]
+    rats = Float64[]; splits = Float64[]
     @printf("  shear at T=%.2f (floor Gamma = %.3e):\n", T0, base.Γ)
     for ηs in (0.01, 0.02, 0.04)
         r = sound(T0, ηs, 0.0)
         Γp = 0.5*r.k^2*(4/3)*(ηs*r.s0)/r.eP_nat
-        push!(rats, (r.Γ - base.Γ)/Γp)
-        @printf("    eta/s=%.3f | Gamma-floor %.5f | NS %.5f | ratio %.3f\n",
-                ηs, r.Γ-base.Γ, Γp, rats[end])
+        g = r.Γ - base.Γ
+        push!(rats, g/Γp)
+        push!(splits, abs((r.Γ1-base.Γ1) - (r.Γ2-base.Γ2))/g)
+        @printf("    eta/s=%.3f | Gamma-floor %.6f | NS %.6f | ratio %.5f | half-split %.4f\n",
+                ηs, g, Γp, rats[end], splits[end])
     end
-    for x in rats; @test 0.85 < x < 1.25; end
-    # the OFFSET must be constant: that is what makes it a background effect
-    @test (maximum(rats) - minimum(rats))/minimum(rats) < 0.05
+    # SUB-PERCENT, now that the mode is the exact eigenmode.
+    for x in rats; @test 0.98 < x < 1.02; end
+    # a clean exponential: the two half-windows must agree. This is the beat
+    # diagnostic -- it read 0.09 with the ideal eigenvector and 0.002 with the
+    # exact one, and it is what distinguishes a real coefficient error (which
+    # would leave the decay exponential) from mode contamination (which does not).
+    @test maximum(splits) < 0.01
 
     # ---------- BULK: on the Lorentzian peak, and following its shape ----------
     # The only quantitative check the bulk sector has: Gubser is conformal.
