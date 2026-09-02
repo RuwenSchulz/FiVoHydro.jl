@@ -58,7 +58,9 @@ const PT_LO, PT_HI = 0.1, 5.0
 const HBARC = 0.1973269804
 
 """Evolve and record tau_fo(x,y) and the flow there."""
-function freeze_surface(tag; N = 200, box = 18.0, dτ = 0.05, τmax = 16.0,
+# dtau = 0.02, not 0.05: with the crossing interpolated the yield is converged at
+# dtau <= 0.02 (0.02 and 0.01 agree to 0.07%), while dtau = 0.05 carries +0.69%.
+function freeze_surface(tag; N = 200, box = 18.0, dτ = 0.02, τmax = 16.0,
                         ηs = 0.10, ζs = 0.10)
     g = H.make_grid2d(N, N; xmax = box, ymax = box)
     m = H.build_model_2d(; eos = H.LatticeHRGEOS(),

@@ -86,6 +86,12 @@ Base.@kwdef struct IdealDiffVisc2DModel{EOS,PR,SH,BU}
     # and |nu|/n = 418 in the tail.
     vacuum_n_lo::Float64        = 1e-6
     vacuum_n_hi::Float64        = 2e-3
+    # D9 (2026-09-02): ramp the charge RELAXATION TIME by the same weight that
+    # ramps the drive, τ_eff = wv·τ_n. Ramping only the drive was sufficient while
+    # τ_n was 6x too short (D8); at the corrected τ_n the current made in the fluid
+    # is frozen into the tail instead of decaying, |ν|/n diverges and the charge row
+    # goes degenerate. Off reproduces the pre-D9 behaviour exactly, for A/B.
+    vacuum_ramp_relax::Bool     = true
 
     # ---- shear ----
     enable_shear::Bool          = false

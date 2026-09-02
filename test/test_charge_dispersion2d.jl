@@ -143,6 +143,39 @@ end
 kstar(D::Float64, τn::Float64) = 1/(2*sqrt(D*τn))
 
 # ------------------------------------------------------------------------------
+# Choosing tau_n: by the REGIME we want, never by a bare number.
+#
+# Every regime in this file is defined by k/k_*, and `k_* = 1/(2 sqrt(D_s tau_n))`
+# -- so pinning `tauN_coeff` to a literal pins the regimes to whatever tau_n
+# HAPPENS to evaluate to. That is not hypothetical: the D8 fix (2026-09-02) moved
+# tau_n by a factor 6, which would have slid Gk-a's two harmonics off the
+# overdamped branch entirely. It would have failed loudly rather than silently,
+# but it would have failed for the wrong reason.
+#
+# So the coefficient is DERIVED from the target: tau_n = 1/(4 D_s k_target^2).
+# ------------------------------------------------------------------------------
+
+const KFUND = 2π/LBOX          # the box's fundamental wavenumber
+
+"""
+    tauD_for_kstar(k_target; DsT) -> tauN_coeff placing the collision at `k_target`
+"""
+function tauD_for_kstar(k_target::Float64; DsT::Float64 = 0.75)
+    _, n0, _ = H.eos_Pne(T0, A0*T0, H.LatticeHRGEOS())
+    m = H.build_model_2d(; eos = H.LatticeHRGEOS(), enable_diff = true,
+                           kappa_coeff = DsT, tauN_coeff = 1.0)
+    κ, τn1, _ = H.diff_coeffs_2d(T0, A0*T0, n0, m)
+    D = κ/n0
+    return 1/(4*D*k_target^2)/τn1
+end
+
+# Gk-a wants BOTH its harmonics overdamped -> put the collision above them.
+# The rest want m=1 overdamped and m>=2 propagating, so the collision sits just
+# above the fundamental.
+const TAUD_OVER = tauD_for_kstar(2.5*KFUND)
+const TAUD_PROP = tauD_for_kstar(1.4*KFUND)
+
+# ------------------------------------------------------------------------------
 # One mode run.
 # ------------------------------------------------------------------------------
 
@@ -331,7 +364,7 @@ end
     println("  overdamped branch (tau_n from the solver's own diff_coeffs_2d):")
     rats = Float64[]; fick = Float64[]
     for harm in (1, 2)
-        r = run_mode(; harmonic = harm, DsT = 0.75, tauD = 1.0, τrun = 18.0)
+        r = run_mode(; harmonic = harm, DsT = 0.75, tauD = TAUD_OVER, τrun = 18.0)
         γ  = -imag(r.w_meas); γr = -imag(r.w_ref)
         xk = (r.k/r.kstar)^2
         @printf("    m=%d k=%.4f (k/k_*=%.3f) | gamma meas %.6f  ref %.6f  ratio %.5f | vs Fick meas %.4f pred %.4f (%.2f%%) | split %.4f | Re w %.2e\n",
@@ -369,7 +402,7 @@ end
     println("  propagating branch:")
     rs = []
     for harm in (2, 3)
-        r = run_mode(; harmonic = harm, DsT = 0.75, tauD = 4.0, τrun = 18.0,
+        r = run_mode(; harmonic = harm, DsT = 0.75, tauD = TAUD_PROP, τrun = 18.0,
                        dτs = 0.2)
         Ω  = real(r.w_meas); Ωr = real(r.w_ref)
         γ  = -imag(r.w_meas); γ0 = 1/(2r.τn)
@@ -395,7 +428,7 @@ end
     # Scan k across the predicted collision. Below it Re w = 0 identically (the
     # roots are on the imaginary axis); above it Re w != 0. The transition
     # wavenumber is the measurement.
-    DsT, tauD = 0.75, 4.0
+    DsT, tauD = 0.75, TAUD_PROP
     _, n0, _ = H.eos_Pne(T0, A0*T0, H.LatticeHRGEOS())
     mref = H.build_model_2d(; eos = H.LatticeHRGEOS(), enable_diff = true,
                               kappa_coeff = DsT, tauN_coeff = tauD)
@@ -427,9 +460,10 @@ end
     # The window has to follow the mode: at tau_n -> 0 the rate is D_s k^2 = 4.5
     # /fm, an e-fold in 0.22 fm, and a 20 fm window measures nothing but the
     # noise floor. Rate first, window second.
-    println("  control, k = pi/fm fixed, tau_n scanned over 200x:")
+    println("  control, k = pi/fm fixed, tau_n scanned over 400x:")
     rows = []
-    for (tauD, τrun, dτs) in ((4.0, 20.0, 0.2), (1.0, 6.0, 0.1), (0.02, 1.2, 0.04))
+    for (fac, τrun, dτs) in ((1.0, 20.0, 0.2), (0.25, 6.0, 0.1), (0.0025, 1.2, 0.04))
+        tauD = TAUD_PROP*fac
         r = run_mode(; harmonic = 6, DsT = 0.75, tauD = tauD, τrun = τrun, dτs = dτs)
         γ = -imag(r.w_meas); xk = (r.k/r.kstar)^2
         @printf("    tau_n = %.4f fm  k/k_* = %.3f | Re w %.5f | gamma %.5f | gamma/(D_s k^2) %.4f%s | split %.4f\n",
@@ -472,7 +506,7 @@ end
     # neither covers this one -- they are about DIFFERENT FLUXES. G3g runs at
     # kappa = 0, so it never exercises the nu flux at all; the advective flux
     # n u^x is built from RECONSTRUCTED primitives and is second order, while nu
-    # is taken cell-centred and is not. See 6y.
+    # is taken cell-centred and is not. See 6aa.
     #
     # This configuration is immune to both retracted explanations by
     # construction: LatticeHRGEOS gives de/dalpha = dP/dalpha = 0 EXACTLY (Gk-0
@@ -493,15 +527,15 @@ end
     # flux left that is not, and it is the one the code says is unreconstructed.
     # The decisive test is to reconstruct nu and see part (i) go second order
     # while part (ii) barely moves. Not done here.
-    println("  (i) propagating branch (m=4, k/k_* = 3.86), dx scanned:")
+    println("  (i) propagating branch (m=4), dx scanned:")
     dn = Float64[]; dxs = Float64[]
     for N in (96, 192, 384)
-        r = run_mode(; harmonic = 4, DsT = 0.75, tauD = 4.0, τrun = 12.0,
+        r = run_mode(; harmonic = 4, DsT = 0.75, tauD = TAUD_PROP, τrun = 12.0,
                        dτs = 0.2, N = N)
         γ = -imag(r.w_meas); γ0 = 1/(2r.τn)
         push!(dn, (γ-γ0)/r.k^2); push!(dxs, r.dx)
-        @printf("      N=%4d dx=%.5f | gamma %.6f  excess %.6f | D_num %.4e = %.4f dx  (%.2f%% of D_s)\n",
-                N, r.dx, γ, γ-γ0, dn[end], dn[end]/r.dx, 100*dn[end]/r.D)
+        @printf("      N=%4d dx=%.5f k/k_*=%.3f | gamma %.6f  excess %.6f | D_num %.4e = %.4f dx  (%.2f%% of D_s)\n",
+                N, r.dx, r.k/r.kstar, γ, γ-γ0, dn[end], dn[end]/r.dx, 100*dn[end]/r.D)
     end
     ord = [log2(dn[i]/dn[i+1]) for i in 1:length(dn)-1]
     @printf("      observed order in dx: %s\n", join(map(o -> @sprintf("%.2f", o), ord), ", "))
@@ -509,14 +543,14 @@ end
     @test dn[2] < dn[1] && dn[3] < dn[2]
     for o in ord; @test 0.80 < o < 1.35; end   # FIRST order. See the note above.
 
-    println("  (ii) overdamped branch (m=1, k/k_* = 0.48), same scan — NO floor:")
+    println("  (ii) overdamped branch (m=1), same scan — NO floor:")
     devs = Float64[]
     for N in (96, 192, 384)
-        r = run_mode(; harmonic = 1, DsT = 0.75, tauD = 1.0, τrun = 12.0, N = N)
+        r = run_mode(; harmonic = 1, DsT = 0.75, tauD = TAUD_OVER, τrun = 12.0, N = N)
         γ = -imag(r.w_meas); γr = -imag(r.w_ref)
         push!(devs, γ/γr - 1)
-        @printf("      N=%4d dx=%.5f | gamma %.7f ref %.7f | dev %+.4f%%\n",
-                N, r.dx, γ, γr, 100*devs[end])
+        @printf("      N=%4d dx=%.5f k/k_*=%.3f | gamma %.7f ref %.7f | dev %+.4f%%\n",
+                N, r.dx, r.k/r.kstar, γ, γr, 100*devs[end])
     end
     # 30x smaller than (i) at the same dx, and it CHANGES SIGN -- so it is not a
     # diffusion floor at all, it is two small errors of opposite sign.
@@ -526,7 +560,7 @@ end
     println("  (iii) the same error is NOT the timestep:")
     gs = Float64[]
     for CFL in (0.30, 0.15)
-        r = run_mode(; harmonic = 4, DsT = 0.75, tauD = 4.0, τrun = 12.0,
+        r = run_mode(; harmonic = 4, DsT = 0.75, tauD = TAUD_PROP, τrun = 12.0,
                        dτs = 0.2, CFL = CFL)
         push!(gs, -imag(r.w_meas))
         @printf("      CFL %.3f | gamma %.6f\n", CFL, gs[end])

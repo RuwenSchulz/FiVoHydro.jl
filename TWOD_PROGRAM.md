@@ -711,8 +711,9 @@ freeze-out-restricted value and reports the global one, as G6 does for reflectio
 | **G6** | **non-axisymmetric IC** (production profile on an elliptical radius): ε₂=0 control anisotropy **identically 0**, anisotropy **converges to 0.08%** over N=100→300, reflection symmetry 1.5e-10 at N≤200 | **PASS** |
 | **INT** | integration, all 11 fields on an ELLIPTIC (ε₂≠0) IC — the case 1-D cannot represent: runs to τ=6, primfail **0**, `π^xy` ≠ 0, momentum anisotropy **+0.186** | **PASS** |
 | **G3** | charge: τ_n copies **bit-identical**; `ν_NS` vs 1-D 6.2e-16; **closed-domain charge drift 9.1e-16**; 0/2104 cells up-gradient; x↔y asymmetry **0.0 exactly** | **PASS** |
-| **Gk** | **charge DISPERSION** (§6y): IS root reproduced to **0.02%** at k/k_*=0.48; the branch collision **bracketed** in (0.524, 1.047) against a predicted `k_*`=0.542; on the propagating branch k×6 moves the damping ×1.8 where diffusive gives ×36; control `τ_n`→0 recovers Fick to 3.27% | **PASS** (39/40 + 1 `@test_broken` = D8) |
-| **D8** | 🔴🔴 `τ_n` in the charge sector is short by **exactly `g_hq` = 6** — `src/dissipation.jl:98` and `src2d/transport2d.jl:41` lack the `eos.g_hq *` that `main2.jl:233` carries; the SAME bug the README records as fixed in two other modules in 2026-07. Signal speed superluminal above **T = 0.4924 GeV** (production IC peaks at 0.5814). Measured blast radius: T 1.9e-7, u 8.2e-7, but charge density **13.6%** and current **135%** | **CLOSED 2026-09-02** (RS instruction) — `eos.g_hq *` added in both files together; τ_n now matches the closed form to **2.2e-16** and the signal speed is **subluminal everywhere** (0.285–0.423c). G3a still bit-identical. See §6y |
+| **Gk** | **charge DISPERSION** (§6aa): IS root reproduced to **0.02%** at k/k_*=0.48; the branch collision **bracketed** in (0.524, 1.047) against a predicted `k_*`=0.542; on the propagating branch k×6 moves the damping ×1.8 where diffusive gives ×36; control `τ_n`→0 recovers Fick to 3.27% | **PASS** (39/40 + 1 `@test_broken` = D8) |
+| **D8** | 🔴🔴 `τ_n` in the charge sector is short by **exactly `g_hq` = 6** — `src/dissipation.jl` and `src2d/transport2d.jl` lacked the `eos.g_hq *` that `main2.jl:233` carries; the SAME bug the README records as fixed in two other modules in 2026-07. Signal speed superluminal above **T = 0.4924 GeV** (production IC peaks at 0.5814). Measured blast radius: T 1.9e-7, u 8.2e-7, but charge density **13.6%** and current **135%** | **CLOSED 2026-09-02** (RS instruction) — `eos.g_hq *` added in both files together; τ_n now matches the closed form to **2.2e-16** and the signal speed is **subluminal everywhere** (0.285–0.423c). G3a still bit-identical. See §6aa; the cost is **D9** below |
+| **D9** | 🔴 the D8 fix **breaks the 2-D charge sector**: ladder 13/18 (G5/G6/G7/G8/G9), G5's x↔y **6.6e-13 → 1.44e-01** at N=300 = D6 returning. Cause MEASURED: `max\|ν\|/n` above T_fo **0.21 → 1.17**, so the charge row goes degenerate — the vacuum ramp / staged fallback / admissibility bound were all calibrated when `τ_n` was 6× too short. ⚠ the 1-D suite PASSES with the fix, so this is `src2d/` only | **OPEN** — not tuned around; `nu_clip` would bind below the old unclipped value. See §6ab |
 | P2 | shear + bulk sector, NS targets, IS relaxation, constraint projection | not started |
 | P3 | charge sector `(α, ν^x, ν^y)`, incl. the D2 covariant-drive derivation | not started |
 | P4 | G4 reproduction gate on the production IC | **done** — `test_reproduction2d.jl`; runs BOTH solvers in-process from the 1-D's own `load_initial_interpolants`, so an IC mismatch is impossible |
@@ -2051,7 +2052,7 @@ deficiency. Nothing here is charge-specific, and the "blocker" of §6w does not 
 
 ---
 
-## 6y. Gk — the charge DISPERSION RELATION, and where the hydrodynamic branch ends
+## 6aa. Gk — the charge DISPERSION RELATION, and where the hydrodynamic branch ends
 
 `Gs` measures the sound dispersion; nothing measured the charge sector's. `test_charge_dispersion2d.jl`
 does, and it is the first measurement anywhere in the repo of the object the programme is organised
@@ -2090,6 +2091,12 @@ splitting — not the coefficient formulas, which G3a pins to round-off.
 
 ### What it measures
 
+🔑 **`tauN_coeff` is DERIVED, never a literal.** Every regime here is defined by `k/k_*`, and
+`k_* = 1/(2√(D_s τ_n))`, so pinning the coefficient to a number pins the regimes to whatever `τ_n`
+happens to evaluate to. Not hypothetical: the D8 fix below moved `τ_n` by 6× and slid Gk-a's two
+harmonics clean off the overdamped branch. `tauD_for_kstar` inverts `τ_n = 1/(4 D_s k_target²)`
+instead, so the gate is immune to the next change in `τ_n`'s definition.
+
 Gate `Gk`, 6 testsets, **N = 192 over a 12 fm periodic box, uniform background at rest**, T = 0.35,
 alpha = -2 (n = 4.9e-2, i.e. 25x the vacuum ramp's `n_hi`, so the ramp is inert and the gate asserts
 that), tau0 = 3200 so the Bjorken drift is frozen. The mode is seeded as the **exact eigenvector**,
@@ -2103,10 +2110,10 @@ entirely by the relaxation.
 
 | k/k_* | gamma measured | reference | ratio | gamma/(D_s k^2) | Fick+IS predicts | dev |
 |---|---|---|---|---|---|---|
-| 0.483 | 0.123587 | 0.123609 | **0.99983** | 1.0661 | 1.0663 | **-0.02%** |
-| 0.966 | 0.730595 | 0.736428 | 0.99208 | 1.5756 | 1.5882 | -0.79% |
+| 0.400 | 0.121005 | 0.120975 | **1.00025** | 1.0438 | 1.0436 | **+0.03%** |
+| 0.800 | 0.578723 | 0.579625 | 0.99844 | 1.2481 | 1.2500 | **-0.16%** |
 
-`Re w` = 1.5e-14 and -9.2e-9: an overdamped mode does not oscillate, to round-off. ⚠ The tolerance is
+`Re w` = 2.3e-15 and 6.6e-12: an overdamped mode does not oscillate, to round-off. ⚠ The tolerance is
 2% and not tighter **on purpose**: `gamma_slow` has a square-root branch point at `k_*`, so
 `(d gamma/gamma)/(d D/D) = x/(2 sqrt(1-x)[1-sqrt(1-x)])` is 1.0 at k/k_* = 0.48 but **2.4** at 0.97.
 The second row is worse for that reason, not because the solver is.
@@ -2115,10 +2122,10 @@ The second row is worse for that reason, not because the solver is.
 
 | k/k_* | Omega meas | ref | gamma | floor 1/(2 tau_n) | excess |
 |---|---|---|---|---|---|
-| 1.932 | 0.40452 | 0.41077 | 0.25660 | 0.24857 | 0.1173 dx k^2 |
-| 2.897 | 0.66641 | 0.67593 | 0.26825 | 0.24857 | 0.1276 dx k^2 |
+| 1.429 | 0.45455 | 0.46361 | 0.45941 | 0.45443 | 0.0728 dx k^2 |
+| 2.143 | 0.84706 | 0.86123 | 0.47146 | 0.45443 | 0.1105 dx k^2 |
 
-**k x1.5 gives Omega x1.647 and gamma x1.045, where a diffusive mode would give x2.250.** The damping
+**k x1.5 gives Omega x1.864 and gamma x1.026, where a diffusive mode would give x2.250.** The damping
 is asserted as a BAND, `1/(2 tau_n) <= gamma <= 1/(2 tau_n) + C dx k^2`, because the scheme's
 numerical diffusion is additive and positive (next section); asserting a bare ratio would be
 asserting that a first-order scheme has no first-order error.
@@ -2127,15 +2134,15 @@ asserting that a first-order scheme has no first-order error.
 
 | m | k [1/fm] | k/k_* | Re w | Im w | |
 |---|---|---|---|---|---|
-| 1 | 0.5236 | 0.966 | **0.00000** | -0.18116 | overdamped |
-| 2 | 1.0472 | 1.932 | 0.40441 | -0.25627 | PROPAGATING |
-| 3 | 1.5708 | 2.897 | 0.66653 | -0.26827 | PROPAGATING |
-| 4 | 2.0944 | 3.863 | 0.91400 | -0.28475 | PROPAGATING |
-| 5 | 2.6180 | 4.829 | 1.15683 | -0.30569 | PROPAGATING |
-| 6 | 3.1416 | 5.795 | 1.39620 | -0.33204 | PROPAGATING |
+| 1 | 0.5236 | 0.714 | **0.00000** | -0.13583 | overdamped |
+| 2 | 1.0472 | 1.429 | 0.45452 | -0.45961 | PROPAGATING |
+| 3 | 1.5708 | 2.143 | 0.84641 | -0.47150 | PROPAGATING |
+| 4 | 2.0944 | 2.857 | 1.19606 | -0.48847 | PROPAGATING |
+| 5 | 2.6180 | 3.571 | 1.53217 | -0.50993 | PROPAGATING |
+| 6 | 3.1416 | 4.286 | 1.86159 | -0.53604 | PROPAGATING |
 
-**Transition bracketed in (0.5236, 1.0472); predicted `k_*` = 0.5421.** Read down the `Im w` column:
-k grows **6x** and the damping moves 0.181 -> 0.332, where a diffusive mode would move **36x**.
+**Transition bracketed in (0.5236, 1.0472); predicted `k_*` = 0.7330.** Read down the `Im w` column:
+k grows **6x** and the damping moves 0.136 -> 0.536, where a diffusive mode would move **36x**.
 
 **Gk-d, the control -- and it is the point of the file.** An oscillation appearing in a diffusion
 solver is exactly what a dispersive numerical artifact looks like. Same k = pi/fm, same D_s, same
@@ -2143,12 +2150,12 @@ grid, same scheme; only `tau_n`, over 200x:
 
 | tau_n [fm] | k/k_* | Re w | gamma | gamma/(D_s k^2) |
 |---|---|---|---|---|
-| 2.0115 | 5.795 | 1.39620 | 0.33204 | 0.0796 |
-| 0.5029 | 2.897 | **2.64774** | 1.06357 | 0.2549 |
-| 0.0101 | 0.410 | **0** (1.1e-12) | 4.50767 | **1.0801** vs Fick+IS 1.0459 |
+| 1.1003 | 4.286 | 1.86171 | 0.53508 | 0.1282 |
+| 0.2751 | 2.143 | **3.35750** | 1.84812 | 0.4428 |
+| 0.0028 | 0.214 | **0** | 4.35114 | **1.0426** vs Fick+IS 1.0118 |
 
 As `tau_n -> 0` the branch point moves out past k, the oscillation vanishes and **Fick is recovered
-to 3.27%**. Note `Re w` is **non-monotone** -- it RISES from 1.40 to 2.65 as `tau_n` falls, because
+to 3.05%**. Note `Re w` is **non-monotone** -- it RISES from 1.86 to 3.36 as `tau_n` falls, because
 `Omega = sqrt(4 tau_n D k^2 - 1)/(2 tau_n)`, and only then collapses. A numerical artifact does not
 do that. 🔑 The window has to follow the mode: at `tau_n -> 0` the rate is 4.5/fm, an e-fold in
 0.22 fm, and the 20 fm window I first used measured nothing but the noise floor.
@@ -2198,14 +2205,14 @@ the charge row's numerical diffusion: one number, `D_num = (γ − 1/(2τ_n))/k�
 
 | N | dx [fm] | gamma | excess | `D_num` | as dx | as % of D_s |
 |---|---|---|---|---|---|---|
-| 96 | 0.12500 | 0.322045 | 0.073480 | 1.675e-2 | 0.1340 dx | 3.96% |
-| 192 | 0.06250 | 0.284526 | 0.035961 | 8.198e-3 | 0.1312 dx | 1.94% |
-| 384 | 0.03125 | 0.266263 | 0.017697 | 4.035e-3 | 0.1291 dx | 0.95% |
+| 96 | 0.12500 | 0.522965 | 0.068539 | 1.563e-2 | 0.1250 dx | 3.70% |
+| 192 | 0.06250 | 0.487815 | 0.033390 | 7.612e-3 | 0.1218 dx | 1.80% |
+| 384 | 0.03125 | 0.470731 | 0.016305 | 3.717e-3 | 0.1189 dx | 0.88% |
 
-**Observed order in dx: 1.03, 1.02.** And on the OVERDAMPED branch, same scan, there is no floor at
-all -- the deviation is 30x smaller and **changes sign** (-0.2403% / -0.0596% / +0.0235%), so it is
+**Observed order in dx: 1.04, 1.03.** And on the OVERDAMPED branch, same scan, there is no floor at
+all -- the deviation is ~30x smaller and **changes sign** (-0.1011% / -0.0049% / +0.0362%), so it is
 not a diffusion floor but two small errors of opposite sign. It is also not the timestep: halving
-`dtau` moves gamma by 1.04e-3 where halving `dx` moved it by 3.75e-2, **36x**.
+`dtau` moves gamma by 3.41e-3 where halving `dx` moved it by 3.52e-2, **10x**.
 
 ⚠ **Written against §6w, and §6x retracted §6w while this was being measured.** §6x shows that
 G3g's 0.85 was a bad *reference* (`ConformalHQEOS` has `P_hq = nT`, so the charm back-reacts) and
@@ -2301,8 +2308,9 @@ the convention there"). `eos.g_hq *` added to `src/dissipation.jl` and `src2d/tr
 | `tau_n` at T_fo = 0.156 | 1.933 fm | **11.595 fm** |
 
 The Gk-0 assertion that found it was `@test_broken` for exactly one session and is a live `@test`
-now; it is what stops the 6x coming back, and unlike G3a it compares against a closed form rather
-than against a copy.
+now (**worst departure 0.0000, exact**); it is what stops the 6x coming back, and unlike G3a it
+compares against a closed form rather than against a copy. Full gate after the fix and the
+retarget: **41/41, exit 0, 8m31s.**
 
 ⚠ **This moves numbers, and the retraction above stays in place, dated, rather than being edited
 away.** Everything that has ever read `alpha` or `nu` from a `main.jl`-family run was computed with a
@@ -2379,3 +2387,113 @@ Cooper-Frye yield to land on 1340, and report the implied entropy normalisation.
 surface runs. That, and the unexplained residuals above, are what stand between the current state and
 a defensible absolute yield.
 
+---
+
+## 6z. ⛔ Correction to §6y — the freeze-out surface IS converged in dτ
+
+§6y reported that interpolating the freeze-out crossing "did not remove the dτ dependence", on the
+strength of **two** points: dτ = 0.05 → 0.02 moved the yield −0.76%. The third point arrived after
+that was written and changes the reading:
+
+| dτ | dN_π/dy | vs dτ = 0.01 |
+|---|---|---|
+| 0.050 | 1180.96 | **+0.69%** |
+| 0.020 | 1172.02 | −0.07% |
+| 0.010 | 1172.83 | — |
+
+**dτ = 0.02 and 0.01 agree to 0.07%.** The series is converged; what the two-point comparison showed
+was not a surviving bias but the distance of the *coarse* sample from the converged value. With the
+crossing interpolated, **dτ ≤ 0.02 gives a converged surface yield**, and dτ = 0.05 carries +0.69%.
+
+So the correct statement is: the surface construction contributes **~0.1%**, not the ~1% claimed in
+§6y — provided dτ ≤ 0.02 is used. `freeze_surface`'s default is dτ = 0.05, which is the setting that
+carries the +0.7%.
+
+⚠ Two-point convergence claims are worth exactly what this one was: I asserted an unexplained
+residual from a difference, where a third point showed the difference *was* the convergence.
+
+
+---
+
+## 6ab. 🔴 D9 — the D8 fix breaks the 2-D charge sector: the guards were calibrated on the bug
+
+§6aa closed D8: `τ_n` was short by `g_hq = 6` and is now correct. This section records what that cost,
+because it is substantial and it is **not** a reason to undo the fix.
+
+### The split is clean, and it is the whole scoping argument
+
+| suite | with the corrected `τ_n` |
+|---|---|
+| **1-D `test/runtests.jl`** (the production path, `src/`) | **PASSES — exit 0, zero failures**, charm-solver gates 9/9 |
+| **2-D ladder** (`src2d/`) | **13/18** |
+
+Everything published runs through `src/`. The 2-D solver is a development instrument that nothing
+ships yet. So the correct physics is in the path that matters and the breakage is in the one that
+does not — which is why the fix stays.
+
+### What fails, and it is NOT only the fluctuating IC
+
+⚠ My first scoping guess — "this only bites on lumpy events" — was **wrong**, and I said it before I
+had the failure list. The smooth production gates fail too.
+
+| gate | verdict | detail |
+|---|---|---|
+| G0, G0b, G1, G1v, Gs, G2, G3, G3g, **Gk**, G4 | PASS | every analytic and smooth-reference gate |
+| **G5** production IC, all sectors | **FAIL** | primfail 6836 / 12978 (was **40**); **x↔y = 1.44e-01 at N=300** (was 6.6e-13); max\|π\|/P above T_fo **5.96** (was 0.20–0.34) |
+| **G6** elliptic IC | **FAIL** | primfail 5520; reflection above T_fo fails |
+| **G7** dissipative vs 1-D | **FAIL** | core `ν^r` **0.0658** vs a 0.04 bound (was 1.5e-2) |
+| **G8** un-averaged production IC | **FAIL** | primfail 19733 (bound 10000); dQ 1.166e-4 (bound 1e-4, marginal) |
+| **G9** single fluctuating event | **FAIL** | primfail 63462; the shear regulator stops being inert, dv₂ 4.1e-6 → **2.2e-3** |
+
+🔴 **G5's `x↔y = 0.144` on an azimuthally symmetric IC is D6 returning** — the exact failure the
+density-gated vacuum ramp was built to close (§6e).
+
+### The mechanism, measured
+
+Attribution is clean: reverting the single token `eos.g_hq *` and re-running G9 gives **23/23 pass**
+with `dv₂ = 4.06e-06`, reproducing the recorded values to the digit. It is this change, not the
+concurrent `main2D.jl`/`freezeout2d.jl` work in the same commit.
+
+`ev02`, N = 200, τ = 0.4 → 4, everything else fixed. `tauN_coeff = 1/6` reproduces the OLD `τ_n`
+exactly without touching `src/`:
+
+| case | primfail | dQ | **max\|ν\|/n above T_fo** |
+|---|---|---|---|
+| old `τ_n`, no clip (the shipped baseline) | 6591 | 1.9e-05 | **0.2097** |
+| old `τ_n` + `nu_clip` 0.3 | 5640 | 5.8e-06 | 0.2087 |
+| **corrected `τ_n`, no clip (current)** | **16498** | 4.2e-04 | **1.1715** |
+| corrected + `nu_clip` 1.0 | 10557 | 3.5e-04 | 1.1717 |
+| corrected + `nu_clip` 0.3 (the 1-D production value) | 8624 | 1.1e-04 | 0.9074 |
+| corrected + `nu_clip` 0.1 | 3392 | 6.4e-07 | 0.1563 |
+
+⇒ **the diffusion current now exceeds the charge density it perturbs, above freeze-out.** With
+`τ_n` six times longer `ν` can no longer track `ν_NS` on a moving background; it retains values from
+earlier, steeper configurations while `n` moves on. The charge row `n u^τ + ν^τ = D` is nearly
+degenerate once `|ν|/n` is large (§6e measured 418 in the tail), so the recovery fails in bulk and
+the discarded hydro block does the rest — D6 and D7, exactly.
+
+🔑 **The guards were calibrated against the bug.** The vacuum ramp, the staged fallback and the
+admissibility bound were all tuned when `ν` tracked `ν_NS` closely, because `τ_n` was 6× too short.
+They are not sufficient at the correct relaxation time.
+
+### ⛔ Why `nu_clip_factor` is NOT the answer, despite the last row
+
+`nu_clip = 0.1` beats the shipped baseline on every column — a third of the primfails, charge
+conservation 30× better. **Adopt it and you are imposing the answer, not measuring it**: it clips
+`|ν|/n` to 0.156, *below* the old **unclipped** 0.210, so it binds on the very quantity the charge
+sector exists to report. `pi_clip_factor`'s licence was that its inertness was MEASURED on the smooth
+IC (Δv₂ = 4.1e-6, §6j); a regulator that binds on the reported quantity has no such licence. Also
+note `nu_clip = 1.0` is nearly useless here (1.1717 vs 1.1715): the cap is `f·n·u^τ`, and `u^τ > 1.17`
+wherever the excursion lives.
+
+### Status
+
+**D9 OPEN.** Not fixed, and deliberately not tuned around. The honest position: the 2-D charge sector
+is not robust at the physically correct `τ_n`, on any IC, and closing that is solver work — the
+charge-row conditioning and the staged fallback, not a clip constant. Until then the 2-D ladder
+stands at **13/18** with the reason recorded here rather than hidden behind a regulator default.
+
+📌 There is a physics reading of `|ν|/n > 1` that is not merely numerical, and §6aa is where it comes
+from: a first-order current larger than the density it perturbs is outside its own domain, which is
+the position-space face of the same statement Gk makes in k-space. Worth keeping in view, but the
+gates above are a solver problem first.

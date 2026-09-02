@@ -110,7 +110,7 @@ end
     # until now the two methods of this function disagreed by 6x depending on the
     # EOS type passed in. Found by gate Gk (`test_charge_dispersion2d.jl`), which
     # checks tau_n against the closed form instead of against a copy of itself;
-    # see TWOD_PROGRAM.md D8 / 6y.
+    # see TWOD_PROGRAM.md D8 / 6aa.
     tauq = eos.g_hq * (DsT / (96.0 * π^2 * Tm^3)) * m^5 * ex * (2.0 * b1 - 3.0 * b3 + b5)
     norm = _fluidum_single_hadron_normalization(Tm, α, eos)
     abs(norm) <= TINY && return 0.0

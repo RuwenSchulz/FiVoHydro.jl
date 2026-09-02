@@ -394,6 +394,41 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
                 nsx, nsy = ns_diffusion_target_2d(ux, uy, uτ, dxa, dya, dta, κ)
                 nsx *= wv; nsy *= wv        # ramp the drive out through the tail
 
+                # 2026-09-02 (D9): ramp the RELAXATION TIME by the same weight,
+                # not just the drive.
+                #
+                # The ramp was written to kill ν_NS in the dilute tail, and that
+                # was sufficient only while τ_n was 6x too short (D8): killing the
+                # DRIVE killed the CURRENT, because ν relaxed to the new target
+                # within a step. At the corrected τ_n it does not. ν made earlier
+                # in the fluid is then FROZEN into the tail while n collapses
+                # around it, |ν|/n diverges, and the charge row `n u^τ + ν^τ = J^τ`
+                # goes degenerate -- D6's mechanism, reached from the other side.
+                # MEASURED at N=300 on the production IC: primfail 0 -> 12292 with
+                # the corrected τ_n, every failure in the tail, and turning
+                # diffusion off restores every field exactly.
+                #
+                # With τ_eff = wv τ_n the tail relaxes to wv ν_NS -> 0 FAST instead
+                # of freezing, and the deep-vacuum limit is ν -> 0 in one step.
+                #
+                # ⚠ NOT inert, and my first claim that it was "bitwise identical
+                # wherever the fluid is" was WRONG -- measured, not argued. The
+                # ramp band reaches ABOVE freeze-out: on the production IC at
+                # N=300 the minimum wv over cells with T > T_fo is 0.22 (0.41 at
+                # the old τ_n), so this acts where observables come from.
+                #
+                # What IS true, and is the licence:
+                #   * it does not move the FIXED POINT. Both variants relax toward
+                #     the same ramped target wv·ν_NS; only the approach rate
+                #     differs. A clip would move the answer; this moves the rate.
+                #   * in the regime where the solver was HEALTHY (the pre-D8 τ_n,
+                #     primfail 0 either way) the A/B is T 1.5e-6, n 1.4e-4,
+                #     ν 2.4e-3 -- it changes no conclusion there.
+                #   * at the corrected τ_n it is the difference between a run that
+                #     works and one that fails in 12292 cells.
+                # `vacuum_ramp_relax = false` reproduces the old behaviour for A/B.
+                model.vacuum_ramp_relax && (τn = wv*τn)
+
                 # projected-derivative correction: ν·a with ν^τ from orthogonality
                 nut = nu_tau_2d(ux, uy, uτ, nux, nuy)
                 nua = -nut*aτ + nux*ax + nuy*ay
