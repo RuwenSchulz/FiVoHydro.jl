@@ -1856,3 +1856,70 @@ Fick check is on a static uniform background (2%), and the 1-D reduction is exac
 concrete next step is Gubser advection — with κ = 0 the charge obeys ∂_μ(nu^μ) = 0 on a known
 non-trivial 2-D flow, so n̂ ∝ 1/cosh²ρ is an exact reference for the transport at second order.
 
+---
+
+## 6v. G3g — charge transport on Gubser flow, and a charge sink in the vacuum cut
+
+The charge sector's only quantitative checks were Fick diffusion on a **static uniform** background
+(2%) and an exact but **one-dimensional** reduction. Neither exercised charge transport on a
+non-trivial 2-D flow. `test_charge_gubser2d.jl` does.
+
+### The exact statement
+
+With κ = 0 the charge obeys ∂_μ(nu^μ) = 0. For ideal conformal flow the entropy obeys the same
+equation and s = aT³, so **n/T³ is conserved exactly along the flow**. Seed it uniform and it must
+stay uniform in space and constant in time, on a background reaching u^r ≈ 2 (v ≈ 0.89). That is
+sharper than comparing n to a profile: a single number that must not move, with nothing to fit.
+
+The seeding is closed form — for the Boltzmann tracer n(T,μ)/n(T,0) = e^α, so
+**α = log(n_target / n(T, μ=0))**, needing no knowledge of A(T). Verified exact to 1e-12.
+
+### Result, τ = 1 → 2
+
+| N | dx | invariant (r≤2) | L2(n) (r≤2) | x↔y | ΔQ/Q |
+|---|---|---|---|---|---|
+| 100 | 0.280 | 8.967e-3 | 1.545e-2 | 7.3e-15 | 9.99e-5 |
+| 200 | 0.140 | 3.436e-3 | 2.833e-3 | 9.2e-15 | 9.95e-5 |
+| 400 | 0.070 | **1.905e-3** | **2.216e-3** | 1.1e-14 | 9.99e-5 |
+
+**Sub-percent (0.19%) on the invariant**, x↔y at round-off. ⚠ **Not second order** — the invariant
+converges at ~0.85 and L2 at ~0.35, toward a floor near 2e-3. The gate asserts a bound and continued
+improvement rather than claiming an order it does not have. Why the charge advection is only ~first
+order where T and u are second order is **not established** and is the obvious next question.
+
+### 🔴 The vacuum cut is a charge sink
+
+ΔQ/Q came out at **6.1e-3** and was independent of resolution *and* of box size (10 vs 14 fm) — which
+rules out both discretisation and boundary outflow, and was what forced the question. Scanning the
+cut, everything else fixed:
+
+| T_vac_cut | 0.05 (production) | 0.02 | 0.01 | 0.005 |
+|---|---|---|---|---|
+| ΔQ/Q | **6.18e-3** | 4.01e-4 | 9.95e-5 | 9.95e-5 |
+| core invariant | 3.436e-3 | 3.436e-3 | 3.436e-3 | 3.436e-3 |
+| isotherm radius at τ=2 | **7.9 fm** | 15.4 fm | 25.7 fm | 43.2 fm |
+
+Gubser's tail crosses T = 0.05 at r = 7.9 fm, **inside** the box, and every cell beyond is zeroed —
+taking its charge. The loss falls 62× and saturates once the cut radius leaves the box, while the
+core invariant does not move at all: the two effects separate cleanly, and the residual 1e-4 is
+genuine outflow.
+
+**Charge is lost wherever the fluid is colder than T_vac_cut.** On the production IC that is small
+(ΔQ/Q ≈ 8e-6) only because its cold tail carries almost no charm — it is a property of how much
+charge sits below the cut, not of the scheme. Worth stating before quoting charm conservation on a
+configuration with a cold, charge-carrying tail.
+
+### Sector status after this pass
+
+| sector | best quantitative check | agreement |
+|---|---|---|
+| ideal | Bjorken, Gubser (2nd order), c_s | 1e-4 … 0.05% |
+| shear | viscous Gubser (2nd order), π vs IS target, attenuation | 0.02% … 0.3% |
+| bulk | **G0b nonlinear at \|Π\|/P = 0.6**, Gs attenuation | 0.09% … 0.75% |
+| charge | **G3g advection on Gubser**, Fick on uniform T | **0.19%** … 2% |
+
+All four are now sub-percent somewhere, and the charge sector has a 2-D test with flow for the first
+time. What is still missing for charge: a test of **diffusion** on a flowing background — G3g has
+κ = 0 by construction, because a non-zero κ destroys the exact solution (α = log(C T³/n(T,0)) is not
+spatially uniform, so ∇α ≠ 0).
+
