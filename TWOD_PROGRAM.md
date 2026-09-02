@@ -1626,3 +1626,63 @@ So: the solver survives grid-scale noise, hollow geometries, colliding blobs and
 special handling, and the boundary of what it will do is 60% local fluctuations or 1.3 GeV hot spots,
 where the bulk pressure goes negative unless the bulk regulator is set below 1.
 
+---
+
+## 6s. The physical single-event Pb+Pb initial condition, 0–5%
+
+`BuildIC2D.jl events 00-05 4` (or `build(CFG2D(; cent_lo=0, cent_hi=5, n_average=1,
+event_offset=k, dx=0.125))`). What actually fluctuates, from `MCGCollisionDensity2D`: Woods-Saxon
+nucleon positions, per-participant `Gamma(k, 1/k)` weights, and the reduced-thickness generalised
+mean, deposited as W = 0.5 fm Gaussians. Charm follows binary collisions, the soft entropy follows
+participants, and the two keep separate geometries.
+
+| | ev01 | ev02 | ev03 | ev04 | ensemble |
+|---|---|---|---|---|---|
+| event index / N_coll | 5014 / 2193 | 5301 / 2124 | 1487 / 2129 | 1044 / 2036 | — / 1787 |
+| ε₂ of the seeded energy density | 0.166 | 0.046 | 0.210 | 0.090 | 0.085 |
+| **ε₃** | **0.095** | **0.114** | **0.133** | **0.082** | **0.0018** |
+| T_max [GeV] | 0.866 | 0.838 | 0.926 | 0.777 | 0.588 |
+| N_charm | 29.20 | 28.28 | 28.35 | 27.11 | 23.79 |
+
+ε₃ is 45–70× the ensemble value; T_max is 1.34–1.59× the ensemble peak. N_coll exceeds the ensemble
+mean because the 0–5% window selects the highest-multiplicity events, and N_charm follows it.
+
+Admissibility, N = 280 (dx = 0.129), `pi_clip_factor = 1.0`, `Pi_clip_factor = 0.5`, worst over the run:
+
+| | max\|u\| | min(P+Π) | max\|π\|/P | ΔQ/Q | ic bad |
+|---|---|---|---|---|---|
+| ev01–ev04 | 1.62–1.72 | +2.9e-2 … +3.1e-2 | 1.00–1.07 | 7.6e-6 … 9.4e-6 | 0 |
+| ensemble | 1.05 | +3.05e-2 | 0.567 | 1.4e-5 | 0 |
+
+### 🔴 The IC grid spacing must divide the domain
+
+Built at dx = 0.15 fm, every event reported **`ic bad = 8`** where the ensemble reported 0.
+`collect(-14.0:0.15:14.0)` ends at **13.9**, because 28/0.15 is not an integer — the IC is short by
+0.1 fm on the +x and +y edges and those solver cells have no data. Silent, small, and exactly the
+kind of thing that becomes a mystery later. `BuildIC2D.jl` now asserts that dx divides 2·xmax;
+0.25, 0.125 and 0.1 do, 0.15 does not. Rebuilt at dx = 0.125: `ic bad = 0` for all four.
+
+### ⚠ The geometry is resolved at dx = 0.25; the peak temperature is not
+
+Same event (index 5014) at three IC spacings:
+
+| dx | grid | ε₂(entropy) | ε₃(entropy) | T_max |
+|---|---|---|---|---|
+| 0.25 | 113² | 0.0993 | 0.0758 | 0.7516 |
+| 0.15 | 187² | 0.0993 | 0.0758 | 0.8016 |
+| 0.10 | 281² | 0.0993 | 0.0758 | 0.8539 |
+
+ε₂ and ε₃ agree to four digits at every spacing — flow observables are safe on the coarse grid. T_max
+is still climbing at dx = 0.10, so anything driven by the hottest cells (charm production in hot
+spots, |π|/P, the sub-nucleon structure) depends on the IC resolution and the choice must be quoted.
+**dx = 0.125 is the one used here**, matched to the solver's own dx ≈ 0.129 — a finer IC would be
+interpolated away on the solver grid.
+
+### ⚠ The charm current is over its bound early, as at 20–30%
+
+max|ν|/n above freeze-out reaches **1.64 (ev01) and 2.00 (ev03)** at τ = 1, falling to 0.13–0.14 by
+τ = 8. Same statement as §6l: on a single event the first-order diffusion current is outside its
+domain for τ ≲ 2, and it is worse at 0–5% than at 20–30% (1.46) because the hot spots are hotter.
+
+Figures: `plots2d/{T,n}_{evolution,slices}_00-05_ev01.*` and `_00-05_ev03.*`.
+
