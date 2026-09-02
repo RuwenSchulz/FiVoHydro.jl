@@ -1555,3 +1555,74 @@ leaves the decay exponential, mode contamination does not.
 [0.98, 1.02] for shear and a half-split below 0.01, so a future change that reintroduces either a
 coefficient error or mode contamination fails.
 
+---
+
+## 6r. The benchmark figure set, and what breaks under exotic initial conditions
+
+### `plot_benchmarks2d.jl` — the four cases with a known answer
+
+| benchmark | reference | result |
+|---|---|---|
+| Bjorken | analytic (τs and τn conserved) | max rel. error in T over τ = 0.4–12: **9.27e-5** |
+| Gubser, ideal | analytic (PRD82 085027) | L2(T) 3.29e-3 → 2.26e-4, **order 1.96** |
+| Gubser, viscous | semi-analytic de Sitter ODE | L2(T) 3.15e-3 → 2.10e-4, **order 2.00** |
+| Sound | Israel–Stewart dispersion | Γ/Γ_IS = **1.00334 / 1.00299 / 1.00210** |
+
+`plots2d/bench_{bjorken, gubser_ideal_T, gubser_viscous_T, gubser_viscous_pi, sound, convergence}`.
+The viscous-Gubser π̄ panel is the one worth looking at: the solver's shear sits on the ODE curve at
+every radius and every time, which is the statement that the nonlinear shear sector is right.
+
+⚠ The sound panel subtracts the ideal run, as gate Gs does. Without that subtraction the same
+figure reads 0.964 / 0.983 / 0.992 — the ideal curve is not flat, because the perturbation grows
+adiabatically as the background cools, and that offset is not viscous damping.
+
+### `exotic_ic2d.jl` — deliberately nasty initial conditions
+
+Every validated case so far is smooth or nearly so. These are not: multiplicative white noise on T at
+10/30/60% correlated over 0.5 fm, the same at 30% correlated over **one cell**, five σ = 0.4 fm hot
+spots reaching T = 1.34 GeV, a hollow ring, two blobs 8 fm apart, and a 0.5 × 12 fm filament.
+
+**All nine run to completion. None crashes.** The worst values over the run (not the final state —
+reading only the end is vacuous here, since most of these have no cell above T_fo left at τ = 8, so
+max|u| comes back 0.00 and min(P+Π) comes back +Inf):
+
+| case | max\|u\| | min(P+Π) | max\|π\|/P | ΔQ/Q | |
+|---|---|---|---|---|---|
+| smooth | 0.70 | +6.4e-3 | 0.533 | 1.0e-4 | ok |
+| noise_10 | 0.80 | +6.2e-4 | 0.782 | 1.1e-4 | ok |
+| noise_30 | 1.01 | +6.2e-4 | 1.000 | 1.1e-4 | ok |
+| **noise_60** | 1.63 | **−4.0e-2** | 1.006 | 1.8e-4 | **inadmissible** |
+| noise_cell | 0.92 | +6.1e-4 | 0.852 | 1.2e-4 | ok |
+| **hotspots** | 2.84 | **−2.9e-2** | 1.119 | 4.9e-6 | **inadmissible** |
+| ring | 1.21 | +5.4e-3 | 0.955 | 8.2e-5 | ok |
+| binary | 0.84 | +1.3e-3 | 1.000 | 3.7e-4 | ok |
+| filament | 1.24 | +6.4e-4 | 1.003 | 9.3e-4 | ok |
+
+Charge is conserved to ≤9e-4 in every case, including grid-scale noise. The evolution is physically
+sensible throughout (`plots2d/exotic_ics.png`): the hot spots each launch an expanding shock ring and
+the rings intersect in a star pattern, the hollow ring implodes to a hot focus, the two blobs merge
+across a compression ridge, and the filament expands transversely.
+
+### 🔴 `Pi_clip_factor = 1.0` cannot guarantee P + Π > 0
+
+The two failures are both min(P+Π) < 0 — the bulk pressure. `Pi_clip_factor` is off by default,
+exactly as `pi_clip_factor` was before G9, so the obvious move is to switch it on. **It changes
+nothing at f = 1.0**, to every printed digit. Scanning it on `hotspots` says why:
+
+| Pi_clip | min(P+Π) | min(Π/P) |
+|---|---|---|
+| off | −2.944e-2 | −1.1077 |
+| **1.0** | **−2.944e-2** | **−1.1077** |
+| 0.5 | **+3.06e-2** | −0.5472 |
+| 0.2 | +4.89e-2 | −0.2171 |
+
+The regulator works exactly as designed — min(Π/P) tracks −f — but Π is capped against the pressure
+**at relaxation time**, and P then falls ~10% before the state is next sampled. The realized bound is
+therefore ≈ 1.1 f, and f = 1.0 leaves Π/P at −1.108: not enough. **f ≲ 0.9 is required for the
+positivity it is supposed to provide, and f = 0.5 gives margin.** The flag does reach the model
+(verified directly); this is a lag, not a wiring defect.
+
+So: the solver survives grid-scale noise, hollow geometries, colliding blobs and filaments without
+special handling, and the boundary of what it will do is 60% local fluctuations or 1.3 GeV hot spots,
+where the bulk pressure goes negative unless the bulk regulator is set below 1.
+
