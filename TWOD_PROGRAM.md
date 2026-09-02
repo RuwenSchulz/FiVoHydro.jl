@@ -1923,3 +1923,67 @@ time. What is still missing for charge: a test of **diffusion** on a flowing bac
 κ = 0 by construction, because a non-zero κ destroys the exact solution (α = log(C T³/n(T,0)) is not
 spatially uniform, so ∇α ≠ 0).
 
+---
+
+## 6w. Diffusion WITH flow — the configuration the charm actually lives in
+
+G3g has κ = 0; the Fick test has κ > 0 but u = 0. The physical case has
+T(x,y,τ), u^x, u^y and κ all non-zero at once, and nothing tested that.
+
+### An exact statement is still available: uniformly boosted background
+
+Uniform fields stay uniform (every ∂_i vanishes, so the Milne equations reduce to ODEs in τ), and
+charm is a pure tracer with dP/dμ = 0, so a charge blob cannot back-react. The background is
+therefore exact at any boost. Diffusion is a rest-frame process, and for the direction **transverse**
+to the boost there is no length contraction either, so the lab-frame spreading rate is slowed by time
+dilation alone:
+
+    d⟨y²⟩/dτ_lab = 2 D_s / γ ,   and the RATIO to the unboosted run must be exactly 1/γ.
+
+Nothing about D_s, the EOS or the units survives in that ratio. It isolates the LRF projection of
+ν^i = −κ(∂_iα + u^i Dα) and the relativistic kinematics.
+
+| u₀ | ⟨γ⟩ | d⟨y²⟩/dτ | measured ratio | 1/⟨γ⟩ | dev | ⟨1/γ⟩ | dev |
+|---|---|---|---|---|---|---|---|
+| 0.00 | 1.0000 | 0.156674 | — | — | — | — | — |
+| 0.50 | 1.1245 | 0.139587 | 0.89094 | 0.88931 | +0.18% | 0.88932 | +0.18% |
+| 1.00 | 1.4365 | 0.109572 | 0.69936 | 0.69614 | +0.46% | 0.69620 | +0.45% |
+| 1.50 | 1.8446 | 0.085498 | 0.54570 | 0.54212 | +0.66% | 0.54223 | +0.64% |
+| 2.00 | 2.2982 | 0.068696 | 0.43846 | 0.43513 | +0.77% | 0.43525 | +0.74% |
+
+**Sub-percent up to u^x = 2, i.e. v = 0.87.** The diffusion current is correctly projected into the
+local rest frame on a flowing background.
+
+⚠ I predicted the small residual trend was Jensen bias from using 1/⟨γ⟩ where ⟨1/γ⟩ is correct. The
+measurement **refutes that**: the two agree to 1e-4, because γ barely moves over the run at τ₀ = 60.
+The residual 0.2–0.8%, growing with γ, is real and **unexplained**.
+
+### 🔴 The full configuration is NOT sub-percent at production resolution
+
+With T(x,y,τ), u^x, u^y and κ all on there is no exact solution — α is not spatially uniform, so
+∇α ≠ 0 destroys any analytic ansatz. The available statement is self-convergence of the charm field
+on the physical single event (τ → 6, sampled on a fixed 60² grid):
+
+| | value |
+|---|---|
+| ‖n(150) − n(600)‖ / ‖n(600)‖ | 3.563e-2 |
+| ‖n(300) − n(600)‖ / ‖n(600)‖ | **1.625e-2** |
+| observed order | **1.13** |
+
+**At the production N = 300 the charm field carries ~1.6% error, and it converges at first order** —
+so sub-percent needs N ≳ 600, not 300. Charge conservation is fine throughout (ΔQ/Q = 1.1e-5 →
+4.5e-6); it is the *shape* of n that is only first-order accurate.
+
+### The blocker, stated plainly
+
+Charge transport converges at ~first order in **two independent tests** — the G3g invariant at order
+0.85 with κ = 0 on Gubser, and the full-physics charm field at 1.13 — while T and u converge at 2.00
+in the very same runs. The cause is **not identified**. It is not the diffusion-current advection
+(G3g has κ = 0), not charge conservation (exact to 1e-5), and not the vacuum ramp (the G3g core is
+far above it).
+
+Until that is found, the honest position is: **the bulk fields are second-order and sub-percent; the
+charm field is first-order and ~1.6% at production resolution.** Anything quoted from n(x,y) inherits
+that, and running at N = 600 buys a factor of two rather than the factor of four a second-order
+scheme would give.
+
