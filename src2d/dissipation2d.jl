@@ -427,7 +427,13 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
                 #   * at the corrected τ_n it is the difference between a run that
                 #     works and one that fails in 12292 cells.
                 # `vacuum_ramp_relax = false` reproduces the old behaviour for A/B.
-                model.vacuum_ramp_relax && (τn = wv*τn)
+                # δ_N = deltaN_factor·τ_n by construction, so ramping τ_n without
+                # ramping δ_N would leave the two halves of the same relaxation
+                # operator on different clocks. Inert at the default
+                # deltaN_factor = 0, but wrong the moment anyone sets it.
+                if model.vacuum_ramp_relax
+                    τn = wv*τn; δN = wv*δN
+                end
 
                 # projected-derivative correction: ν·a with ν^τ from orthogonality
                 nut = nu_tau_2d(ux, uy, uτ, nux, nuy)

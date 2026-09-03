@@ -177,7 +177,34 @@ end
     @test core[:Pi]    < 5e-2
     @test core[:pirr]  < 8e-2
     @test core[:pieta] < 2e-2
-    @test core[:nur]   < 4e-2
+
+    # ---- nu^r is guarded by CONVERGENCE, not by a bound at one resolution ----
+    # 2026-09-03: the D8 fix (tau_n was short by g_hq = 6) made nu larger and more
+    # history-dependent, and core[:nur] at N = 200 went 1.5e-2 -> 6.6e-2, over the
+    # old 4e-2 bound. Measured against N, everything else is FLAT and only nu moves:
+    #
+    #   N     T        alpha    ur       Pi       pirr     nur
+    #   150   6.1e-4   6.8e-3   6.5e-3   2.3e-2   3.8e-2   9.24e-2
+    #   200   7.5e-4   9.9e-3   6.2e-3   2.3e-2   4.2e-2   6.58e-2
+    #   300   8.8e-4   1.2e-2   6.7e-3   2.2e-2   4.1e-2   4.31e-2
+    #   400   8.5e-4   1.2e-2   6.6e-3   2.1e-2   4.2e-2   3.12e-2
+    #
+    # ~first order in dx, and that is not a coincidence: the diffusive flux nu is
+    # taken CELL-CENTRED at the faces (`rhs2d.jl:269`) where the ideal fluxes are
+    # reconstructed, so nu is the one field converging at first order while the
+    # others are second (TWOD_PROGRAM.md 6ab, gate Gk part (i)). The 1-D reference
+    # runs at Nr = 800; a coarse 2-D nu compared against it will always show this.
+    #
+    # So the meaningful assertion is that refining CLOSES the gap. A fixed bound at
+    # one N would either fail a correct solver or hide a real regression.
+    S3, C3, res3 = binned_2d(300, ref)
+    nur3 = max(shell_err(S3, C3, ref, :nur, 0.0, 2.0)[1],
+               shell_err(S3, C3, ref, :nur, 2.0, 4.0)[1])
+    @printf("  nu^r core: N=200 %.2e -> N=300 %.2e  (ratio %.2f, dx ratio 1.50)\n",
+            core[:nur], nur3, core[:nur]/nur3)
+    @test nur3 < core[:nur]          # refining must help
+    @test nur3 < 5e-2                # and land here at N = 300
+    @test res3.nprimfail < 5_000
 
     # The BULK must agree everywhere, not only in the core: T carries no guard
     # that the 1-D lacks, so a global disagreement there would be a real defect.

@@ -250,6 +250,20 @@ function run_mode(; harmonic::Int = 1, DsT::Float64 = 0.75, tauD::Float64 = 1.0,
     end
     _, b1 = amp()
 
+    # The mode is y-independent by construction and periodic BCs preserve that, so
+    # `amp()` samples a single row. That is an ASSUMPTION the entire measurement
+    # rests on, so it is checked rather than trusted: max spread of the conserved
+    # charge row across y, relative to its own mean.
+    ysprd = 0.0
+    let
+        for ix in (ng+1):(ng+g.Nx)
+            v0 = U[L.iDtau, H.lin(g, ix, ng+1)]
+            for iy in (ng+1):(ng+g.Ny)
+                ysprd = max(ysprd, abs(U[L.iDtau, H.lin(g, ix, iy)] - v0)/max(abs(v0), 1e-300))
+            end
+        end
+    end
+
     # unwrap the phase (Gs does the same; a mode with Omega*dτs > π would alias,
     # which is why dτs is a keyword and is checked against the period below)
     for j in 2:length(ph)
@@ -268,7 +282,7 @@ function run_mode(; harmonic::Int = 1, DsT::Float64 = 0.75, tauD::Float64 = 1.0,
     return (; k, D, τn, n0, dx, w_meas = complex(wR, wI), w_ref = w,
               w_fast = modes(k, D, τn)[2], kstar = kstar(D, τn), split,
               Tdrift = (Ts[end]-Ts[1])/Ts[1], ndrift = (b1-b0)/b0,
-              nsamp = nn, τrun, dτs, ts, la, ph)
+              nsamp = nn, ysprd, τrun, dτs, ts, la, ph)
 end
 
 _relerr(a, b) = abs(a - b)/max(abs(b), 1e-30)
@@ -281,7 +295,7 @@ slow root decays FASTER than Fick, and this is the whole k-dependence of that
 excess -- so matching it is a test of the RELAXATION structure and not merely of
 a diffusion constant. `-> 1` as `x -> 0`.
 """
-fick_excess(x::Float64) = 2*(1 - sqrt(1 - x))/x
+fick_excess(x::Float64) = x >= 1 ? NaN : 2*(1 - sqrt(1 - x))/x
 
 # The scheme's numerical-diffusion floor on the charge row, MEASURED in Gk-e:
 # D_num = C_NUM * dx with C_NUM ~ 0.13, first order in dx. It is additive and
@@ -376,6 +390,7 @@ end
         @test abs(real(r.w_meas)) < 0.02*γ
         @test r.split < 0.05
         @test r.Tdrift < 5e-3
+        @test r.ysprd < 1e-12          # the single-row sampling is legitimate
     end
     # 2% and not tighter ON PURPOSE: gamma_slow has a SQUARE-ROOT BRANCH POINT at
     # k_*, so d gamma/gamma per d D/D is x/(2 sqrt(1-x)[1-sqrt(1-x)]) -- 1.0 at

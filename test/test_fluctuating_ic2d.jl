@@ -160,12 +160,38 @@ end
         @test ev200.e3 > 0.05
 
         # ---- admissibility, the quantities the divergence moved ----
-        for r in (ev200, ev300)
+        for (r, N) in ((ev200, 200), (ev300, 300))
             @test r.maxu < 3.0            # was 28.1 / 32.7 unregulated
-            @test r.dQ  < 1e-4            # was 0.39-0.54: half the charge
             @test r.minP > 0.0            # was negative
             @test r.mpi < 2.0             # was 1e7-1e12
-            @test r.pf  < 10_000
+            # 🔑 PER CELL, not an absolute count. `pf` accumulates cell-failures over
+            # steps, so an absolute bound applied at two resolutions is stricter at
+            # the finer one for no physical reason. Measured, the RATE is flat:
+            # 8294/200^2 = 0.207 and 17528/300^2 = 0.195 -- the same fixed cold-tail
+            # region, counted on more cells. The old `pf < 10_000` passed N=200 and
+            # failed N=300 on exactly that arithmetic.
+            @test r.pf/N^2 < 0.35
+        end
+
+        # ---- charge conservation ----
+        # 2026-09-03, RE-BASELINED, and the cause is measured rather than assumed.
+        # The bound was 1e-4, set when tau_n was a factor g_hq = 6 too short (D8).
+        # With the corrected tau_n the current persists ~6x further into the cold
+        # edge before decaying, and TWOD_PROGRAM.md 6v established that the vacuum
+        # cut is a CHARGE SINK -- charge is lost wherever the fluid is colder than
+        # T_vac_cut. So more charge reaches the sink. Attributed three ways on the
+        # ensemble IC (N=200, tau=8): old tau_n 1.97e-5, corrected tau_n 5.21e-4,
+        # corrected + the D9 relaxation ramp 2.36e-4 -- i.e. D9 HALVES it and the
+        # residual is what the corrected physics costs.
+        #
+        # It is a knob, not a defect: T_vac_cut 0.05 -> 0.02 -> 0.01 gives
+        # dQ 2.4e-4 -> 6.4e-10 -> 2.6e-12, at the price of primfail 2497 -> 16860
+        # -> 256927 as far more cold cells become "fluid". Which side of that trade
+        # production sits on is a physics decision and is NOT made here.
+        #
+        # 1e-3 is ~4x the measured 2.7e-4: a regression guard, not a restatement.
+        for r in (ev200, ev300)
+            @test r.dQ < 1e-3
         end
 
         # ---- v3 is a MEASUREMENT, i.e. resolution-converged ----
