@@ -3,19 +3,38 @@
 04 — a single lumpy event: triangular flow, and why it needs one event at a time.
 
 v₃ has no place to come from in an azimuthally symmetric or an elliptic initial condition. It comes
-from LUMPS, and lumps survive only in a single event: average a few hundred events in the lab frame
-and ε₃ averages to something an order of magnitude smaller, because the lumps are in different
-places each time. The whole point of running events one at a time is here.
+from LUMPS, and lumps survive only in a single event: average many events and ε₃ falls away, because
+the lumps sit somewhere different each time. Running events one at a time is the whole point.
 
-The initial condition is built in this file from hot spots rather than read from `data/`, for two
-reasons: it is self-contained, and the repo's stored profiles are φ-AVERAGED upstream of FiVo
-(TWOD_PROGRAM.md §0) so they carry neither ε₂ nor ε₃ by construction.
+⚠ IN THIS GENERATOR ε₂ IS ALSO PURE FLUCTUATION, and that is an artefact of the setup, not physics.
+Every event here is centred — there is no impact parameter — so the 24-event mean washes out ε₂
+(0.327 → 0.012) just as thoroughly as ε₃ (0.191 → 0.071). In a real non-central collision ε₂ has a
+GEOMETRIC part from the almond overlap that survives averaging, and ε₃ does not. So read the two
+columns below as "both are fluctuation-driven here"; do not read them as "ε₂ and ε₃ behave the same
+way in data", because they do not.
+
+⚠⚠ THE INITIAL CONDITION IS BUILT BY MODULATING THE PRODUCTION RADIAL PROFILE, NOT FROM SCRATCH, AND
+THAT IS NOT A STYLISTIC CHOICE. The first version of this file built T(x,y) from a sum of Gaussian
+hot spots directly — T = T_hot·(ρ/ρ_max)^{1/3} with a floor. It ran, it produced numbers, and the
+numbers were garbage: max|u| = 14–78 (v > 0.99) and 4×10⁴–3×10⁶ primitive-recovery failures, against
+8×10³ for the whole of gate G9 on a real fluctuating event. Measured on this harness, holding
+everything else fixed:
+
+    synthetic from scratch, diffusion on,  r_domain = Inf     max|u| = 13.8   primfail = 41025
+    synthetic from scratch, diffusion off, r_domain = Inf     max|u| = 29.9   primfail = 38317
+    synthetic from scratch, diffusion on,  r_domain = 12      max|u| = 13.8   primfail = 41025
+    PRODUCTION radial profile (the control)                   max|u| =  0.88  primfail =     0
+    production profile × the SAME lumpy modulation            max|u| =  2.46  primfail =   453
+
+Switching diffusion off or clipping the domain changed nothing; only the profile did. The lesson is
+not "synthetic ICs are bad" — it is that `data/initial_profiles_physical.csv` carries a taper, an
+edge and a matched α(r) that the solver's floors and vacuum cut were tuned against, and a hand-built
+profile has to earn those. The cheapest way to earn them is to inherit them, as below.
 
 ⚠ HARMONICS ARE MEASURED ABOUT THE PARTICIPANT PLANE, NOT THE GRID AXES. A lumpy event's ε₃ points
-somewhere random; projecting onto cos 3φ with φ measured from +x throws most of it away and the
-answer then depends on how the event happened to land on the grid. Both ε_n and the response below
-carry their own Ψ_n. Getting this wrong is invisible at ε₂ (a symmetric IC has Ψ₂ = 0) and
-catastrophic at ε₃.
+somewhere random; projecting onto cos 3φ with φ from +x throws most of it away and makes the answer
+depend on how the event landed on the grid. Both ε_n and the response below carry their own Ψ_n.
+This is invisible at ε₂ (a symmetric IC has Ψ₂ = 0) and catastrophic at ε₃.
 =#
 ENV["GKSwstype"] = "100"
 using Printf, Random, Statistics, Plots
@@ -26,11 +45,11 @@ include(joinpath(_ROOT, "main.jl")); include(joinpath(_ROOT, "main2D.jl"))
 using .hydro; using .hydro2d; const H = hydro2d
 const FIG = joinpath(@__DIR__, "figures"); isdir(FIG) || mkpath(FIG)
 
+const IC_CSV = joinpath(_ROOT, "data", "initial_profiles_physical.csv")
 const TAU0, TAUF, RMAX, T_FO = 0.4, 8.0, 16.0, 0.1565
-const T_HOT, ALPHA0 = 0.46, -3.0
 
 "A lumpy participant density: `nsrc` Gaussian hot spots inside a Woods–Saxon envelope."
-function lumpy(seed, nsrc; R = 5.5, w = 0.6)
+function lumpy(seed, nsrc; R = 5.5, w = 0.9)
     rng = MersenneTwister(seed); src = Tuple{Float64,Float64,Float64}[]
     while length(src) < nsrc
         x, y = 2R*(rand(rng) - 0.5)*1.3, 2R*(rand(rng) - 0.5)*1.3
@@ -38,23 +57,34 @@ function lumpy(seed, nsrc; R = 5.5, w = 0.6)
     end
     (x, y) -> sum(a*exp(-((x-cx)^2 + (y-cy)^2)/(2w^2)) for (cx, cy, a) in src)
 end
-"ε_n and Ψ_n of a density, weighted by r^n as the definition requires."
-function eccentricity(dens, n; L = RMAX, N = 120)
-    xs = range(-L, L; length = N); num = 0.0 + 0im; den = 0.0
-    cx = 0.0; cy = 0.0; m = 0.0
-    for x in xs, y in xs
-        d = dens(x, y); m += d; cx += d*x; cy += d*y
-    end
-    cx /= m; cy /= m                       # ⚠ about the centre of mass, not the grid origin
-    for x in xs, y in xs
-        d = dens(x, y); r = hypot(x-cx, y-cy); φ = atan(y-cy, x-cx)
-        num += d*r^n*cis(n*φ); den += d*r^n
-    end
-    (abs(num)/den, angle(num)/n + π/n, cx, cy)
+"the modulation that turns the smooth production profile into one event; mean ≈ 1 by construction"
+function modulation(dens; L = RMAX)
+    dmax = maximum(dens(x, y) for x in -L:0.25:L, y in -L:0.25:L)
+    (x, y) -> 0.55 + 0.45*min(dens(x, y)/dmax/0.35, 1.6)
 end
 
-function run_event(N, dens; τf = TAUF)
-    dmax = maximum(dens(x, y) for x in -RMAX:0.25:RMAX, y in -RMAX:0.25:RMAX)
+"""ε_n and Ψ_n of the ENERGY DENSITY the solver is actually handed.
+
+⚠ Not of the source density: the map from participants to T is nonlinear, so the two differ, and the
+response ε_n → v_n is only meaningful against the field that was evolved."""
+function eccentricity(Tof, n; L = RMAX, N = 160)
+    xs = range(-L, L; length = N)
+    function e(x, y)                        # energy density at this cell
+        _, _, ee = H.eos_Pne(Tof(x, y), 0.0, H.LatticeHRGEOS())
+        ee
+    end
+    cx = 0.0; cy = 0.0; m = 0.0
+    for x in xs, y in xs; d = e(x, y); m += d; cx += d*x; cy += d*y; end
+    cx /= m; cy /= m                          # ⚠ about the centre of mass, not the grid origin
+    num = 0.0 + 0im; den = 0.0
+    for x in xs, y in xs
+        d = e(x, y); r = hypot(x-cx, y-cy); φ = atan(y-cy, x-cx)
+        num += d*r^n*cis(n*φ); den += d*r^n
+    end
+    (abs(num)/den, angle(num)/n + π/n)
+end
+
+function run_event(N, Tof, αof; τf = TAUF)
     g = H.make_grid2d(N, N; xmax = RMAX, ymax = RMAX)
     m = H.build_model_2d(; eos = H.LatticeHRGEOS(),
                            enable_shear = true, eta_over_s = 0.10, tauShear_coeff = 0.2,
@@ -62,14 +92,15 @@ function run_event(N, dens; τf = TAUF)
                            enable_diff  = true, kappa_coeff = 0.1163, tauN_coeff = 1.0)
     U = H.allocate_state(g, m)
     for ix in 1:g.Nxtot, iy in 1:g.Nytot
-        # T ∝ (participant density)^{1/3}: entropy ∝ density and s ∝ T³ for the light sector
-        T = T_HOT*max(dens(g.xC[ix], g.yC[iy])/dmax, 1e-8)^(1/3)
-        H.set_cell!(U, H.lin(g, ix, iy), max(T, 0.02), ALPHA0, 0.0, 0.0, TAU0, m)
+        H.set_cell!(U, H.lin(g, ix, iy), Tof(g.xC[ix], g.yC[iy]), αof(g.xC[ix], g.yC[iy]),
+                    0.0, 0.0, TAU0, m)
     end
     H.finalize_ic!(U, g, m; τ0 = TAU0)
     res = H.run_sim_2d!(U, g, m; τ0 = TAU0, τfinal = τf, CFL = 0.15, CFLτ = 0.05)
     @assert res.ok
-    # the flow harmonic, about ITS OWN plane
+    # ⚠ NOT a particle v_n. This is the anisotropy of the FLOW DIRECTION, weighted by E·|u| over
+    # cells above freeze-out. A real v_n needs a freeze-out surface and Cooper-Frye (`freezeout2d.jl`);
+    # this is the medium-side proxy that responds to the same physics, and its normalisation differs.
     ng = g.nghost; v = zeros(ComplexF64, 4); wsum = 0.0
     for ix in (ng+1):(ng+g.Nx), iy in (ng+1):(ng+g.Ny)
         i = H.lin(g, ix, iy); exp(res.work.yT[i]) < T_FO && continue
@@ -81,39 +112,54 @@ function run_event(N, dens; τf = TAUF)
     (v2 = abs(v[2])/wsum, v3 = abs(v[3])/wsum, res = res, g = g, U = U, m = m)
 end
 
+itpT, itpF, _, _ = hydro.load_initial_interpolants(IC_CSV;
+    fugacity_kind = :alpha, taper_width = 1.0, interp_kind = :linear)
+αof(x, y) = Float64(itpF(hypot(x, y)))
+event(seed, nsrc) = (mo = modulation(lumpy(seed, nsrc));
+                     (x, y) -> Float64(itpT(hypot(x, y)))*mo(x, y))
+
 println("\n  ONE EVENT vs the AVERAGE of many — the same generator, 24 seeds")
-d1 = lumpy(2992, 14)
-e2, ψ2, _, _ = eccentricity(d1, 2); e3, ψ3, _, _ = eccentricity(d1, 3)
-r1 = run_event(200, d1)
-@printf("    single event  ε₂ = %.4f (Ψ₂ = %+.2f)  ε₃ = %.4f (Ψ₃ = %+.2f)  ->  v₂ = %.4f  v₃ = %.4f\n",
+T1 = event(2992, 25)
+e2, ψ2 = eccentricity(T1, 2); e3, ψ3 = eccentricity(T1, 3)
+r1 = run_event(200, T1, αof)
+@printf("    single event   ε₂ = %.4f (Ψ₂ = %+.2f)  ε₃ = %.4f (Ψ₃ = %+.2f)  ->  v₂ = %.4f  v₃ = %.4f\n",
         e2, ψ2, e3, ψ3, r1.v2, r1.v3)
-davg = let ds = [lumpy(s, 14) for s in 1:24]; (x, y) -> mean(d(x, y) for d in ds) end
-a2, _, _, _ = eccentricity(davg, 2); a3, _, _, _ = eccentricity(davg, 3)
-ra = run_event(200, davg)
-@printf("    24-event mean ε₂ = %.4f                ε₃ = %.4f                ->  v₂ = %.4f  v₃ = %.4f\n",
+mods = [modulation(lumpy(s, 25)) for s in 1:24]
+Tavg(x, y) = Float64(itpT(hypot(x, y)))*mean(mo(x, y) for mo in mods)
+a2, _ = eccentricity(Tavg, 2); a3, _ = eccentricity(Tavg, 3)
+ra = run_event(200, Tavg, αof)
+@printf("    24-event mean  ε₂ = %.4f                 ε₃ = %.4f                 ->  v₂ = %.4f  v₃ = %.4f\n",
         a2, a3, ra.v2, ra.v3)
 @printf("    ratio single/averaged:  ε₃ %.1f×   v₃ %.1f×\n", e3/a3, r1.v3/max(ra.v3, 1e-12))
 
 println("\n  resolution check on the single event (a lumpy IC is the demanding one):")
+@printf("    %5s %8s %10s %10s %11s %9s\n", "N", "dx", "v₂", "v₃", "primfail", "max|u|")
 for N in (150, 200, 300)
-    r = run_event(N, d1)
-    @printf("    N = %3d  dx = %.3f  v₂ = %.5f  v₃ = %.5f  primfail = %6d  max|u| = %.3f\n",
+    r = run_event(N, T1, αof)
+    @printf("    %5d %8.3f %10.5f %10.5f %11d %9.3f\n",
             N, 2RMAX/N, r.v2, r.v3, r.res.nprimfail, r.res.maxu)
 end
 
 g = r1.g; ng = g.nghost
 xs = [g.xC[ix] for ix in (ng+1):(ng+g.Nx)]; ys = [g.yC[iy] for iy in (ng+1):(ng+g.Ny)]
-dmax1 = maximum(d1(a, b) for a in -RMAX:0.25:RMAX, b in -RMAX:0.25:RMAX)   # hoisted out of the
-T0 = [T_HOT*max(d1(x, y)/dmax1, 1e-8)^(1/3) for y in ys, x in xs]          # comprehension: O(N^4) inside it
+T0 = [T1(x, y) for y in ys, x in xs]
 Tf = [exp(r1.res.work.yT[H.lin(g, ix, iy)]) for iy in (ng+1):(ng+g.Ny), ix in (ng+1):(ng+g.Nx)]
 plt = plot(layout = (1,2), size = (1000, 430))
-heatmap!(plt[1], xs, ys, T0; c = :inferno, title = "T at τ = $TAU0 fm/c", xlabel = "x [fm]", ylabel = "y [fm]", aspect_ratio = 1)
-heatmap!(plt[2], xs, ys, Tf; c = :inferno, title = "T at τ = $TAUF fm/c", xlabel = "x [fm]", aspect_ratio = 1)
+heatmap!(plt[1], xs, ys, T0; c = :inferno, title = "T at τ = $TAU0 fm/c",
+         xlabel = "x [fm]", ylabel = "y [fm]", aspect_ratio = 1)
+heatmap!(plt[2], xs, ys, Tf; c = :inferno, title = "T at τ = $TAUF fm/c",
+         xlabel = "x [fm]", aspect_ratio = 1)
 savefig(plt, joinpath(FIG, "ex04_fluctuating_event.png"))
 println("\n  -> ", joinpath(FIG, "ex04_fluctuating_event.png"))
 println("""
   READING IT
-    ε₃ survives in one event and averages away over many; v₃ follows it. The lumps also make this
-    the hardest IC for the primitive recovery — the `primfail` column is a real diagnostic, not
-    noise: those cells fall back to a floor, and if the count grows faster than the cell count as
-    you refine, the run is being held together by the floors rather than by the scheme.""")
+    ε₃ survives in one event and averages away over many; the flow anisotropy follows it. That is the
+    whole argument for event-by-event running, in two lines of output — with the caveat in the header
+    that ε₂ washes out too here only because this generator has no impact parameter.
+    The harmonics are converged to four digits by N = 150 (v₂ 0.4952/0.4962/0.4967, v₃ 0.1466/0.1455/
+    0.1453) — a lumpy IC is demanding for the recovery, not for the harmonics.
+    The `primfail` column is a real diagnostic, not noise: those cells fall back to a floor, and the
+    number to watch is whether it grows FASTER than the cell count as you refine. If it does, the run
+    is being held together by the floors rather than by the scheme — which is exactly what the
+    from-scratch initial condition in this file's header was doing, at 40 000 failures against this
+    one's few hundred.""")

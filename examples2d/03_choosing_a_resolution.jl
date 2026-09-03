@@ -101,6 +101,26 @@ ord(a, b, c) = log(abs(a-b)/abs(b-c))/log(1.5)
 @printf("    L2(T) hot region    N=100 vs 225 %.3e   N=150 vs 225 %.3e   (ratio %.2f)\n",
         l2_against(runs[225], runs[100]), l2_against(runs[225], runs[150]),
         l2_against(runs[225], runs[100])/max(l2_against(runs[225], runs[150]), 1e-30))
+# ── the figure: errors against the finest grid, on log-log with reference slopes ─────────────────
+# Plotted against the FINEST run rather than against an extrapolated limit, because with three points
+# a Richardson limit is itself uncertain and plotting against it hides that. The reference slopes are
+# drawn, not fitted.
+let ref = runs[NS[end]], dxs = [2RMAX/N for N in NS[1:end-1]]
+    eT  = [abs(runs[N].T0    - ref.T0)    for N in NS[1:end-1]]
+    eA  = [abs(runs[N].aniso - ref.aniso) for N in NS[1:end-1]]
+    eL2 = [l2_against(ref, runs[N])       for N in NS[1:end-1]]
+    plt = plot(size = (720, 470), xscale = :log10, yscale = :log10, legend = :bottomright,
+               xlabel = "Δx  [fm]", ylabel = "difference from the N = $(NS[end]) run",
+               title = "three quantities, three convergence rates")
+    plot!(plt, dxs, eT;  marker = :circle,   label = "T at the centre")
+    plot!(plt, dxs, eL2; marker = :square,   label = "L2 of T over the hot region")
+    plot!(plt, dxs, eA;  marker = :diamond,  label = "momentum anisotropy")
+    plot!(plt, dxs, eL2[1] .* (dxs ./ dxs[1]).^1; ls = :dash, lc = :grey, label = "slope 1")
+    plot!(plt, dxs, eT[1]  .* (dxs ./ dxs[1]).^2; ls = :dot,  lc = :grey, label = "slope 2")
+    savefig(plt, joinpath(FIG, "ex03_convergence.png"))
+    println("\n  -> ", joinpath(FIG, "ex03_convergence.png"))
+end
+
 println("""
   READING IT
     Three quantities, three different answers, from one ladder:
