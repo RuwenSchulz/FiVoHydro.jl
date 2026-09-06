@@ -160,3 +160,48 @@ Base.@kwdef struct IdealDiffVisc2DModel{EOS,PR,SH,BU}
 end
 
 @inline layout2d(m::IdealDiffVisc2DModel) = m.layout
+
+# ------------------------------------------------------------------------------
+# Unwired knobs — refuse them loudly instead of ignoring them silently.
+#
+# Eight fields above exist for signature parity with the 1-D IdealDiffViscModel
+# but NOTHING in src2d/ or main2D.jl reads them (verified by grep, 2026-09-04),
+# while the 1-D solver honours all eight. `build_model_2d(; kwargs...)` forwards
+# them into the struct without complaint, so before this guard a 1-D↔2-D A/B at
+# non-default settings silently compared different physics. That is not a
+# hypothetical failure shape in this repo: the entire finding of
+# Projects/FiVoFluidumComparison/COMPARISON_2P1D.md is one code carrying a
+# second-order coefficient (δ_ππ) the other lacks — `deltaPi_factor` being dead
+# here is the same trap one sector over. Until a knob is wired AND gated, setting
+# it is an error, in the LangevInMedium-0.2.3 style: refuse with a message that
+# names the alternative.
+# ------------------------------------------------------------------------------
+const _UNWIRED_KNOBS_2D = (
+    (:diffusion_drive,     :alpha),
+    (:diff_dt_coeff,       0.0),
+    (:taupi_pi_factor,     0.0),
+    (:shear_dt_coeff,      0.0),
+    (:deltaPi_factor,      0.0),
+    (:lambda_Pi_pi_factor, 0.0),
+    (:lambda_pi_Pi_factor, 0.0),
+    (:bulk_dt_coeff,       0.0),
+)
+
+"""
+    reject_unwired_knobs_2d(model)
+
+Error if any declared-but-unread model knob is set away from its default. Called
+from `build_model_2d` and again at `run_sim_2d!` entry, so direct struct
+construction cannot slip past it either.
+"""
+function reject_unwired_knobs_2d(m::IdealDiffVisc2DModel)
+    for (knob, def) in _UNWIRED_KNOBS_2D
+        v = getfield(m, knob)
+        v == def && continue
+        error("IdealDiffVisc2DModel: `$knob = $v` is NOT implemented in the 2-D solver — the field " *
+              "exists for parity with the 1-D model, which honours it, but nothing in src2d/ reads it. " *
+              "Setting it here would silently run different physics than the same setting in 1-D. " *
+              "Use the default ($def), or wire the term into dissipation2d.jl and gate it first.")
+    end
+    return nothing
+end

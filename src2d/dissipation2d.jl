@@ -76,8 +76,10 @@
 # ⚠ The 1-D code writes this term via `Dy = (∂_τu^r + u^r ∂_ru^r)/u^τ`
 # (src/dissipation.jl, the `- τn v Dy` entry in `damp`). With y = asinh u^r the
 # comoving derivative is Dy = u^τ∂_τ y + u^r∂_r y = ∂_τu^r + (u^r/u^τ)∂_ru^r — the
-# ∂_τ piece should NOT carry the 1/u^τ. See TWOD_PROGRAM.md D5: algebra only,
-# magnitude UNMEASURED, production untouched.
+# ∂_τ piece should NOT carry the 1/u^τ. TWOD_PROGRAM.md D5: CLOSED 2026-09-02 as
+# negligible, MEASURED on a real 1-D run — the `Dy`-form error is 5.9e-5 of the
+# ν-update denominator (the whole term is 4.8e-4), swamped by the backward-Euler
+# weight A ≈ 80. Real algebra, production untouched on purpose.
 #
 # ------------------------------------------------------------------------------
 # TRANSPORT: the dissipative dofs are advected INSIDE this substep by upwinding

@@ -31,8 +31,50 @@
 #
 # ⚠ The IC's NORMALISATION is inherited from the 1-D calibration via a
 # density -> T map, not re-derived in 2-D (BuildIC2D.jl header). It reproduces the
-# 1-D charm count to 0.2% and the central temperature exactly, but the pion yield
-# of a 2-D run built this way has NOT been checked against ALICE.
+# 1-D charm count to 1.0% (23.792 pairs against the 1-D build's 24.038) and the
+# central temperature to 1.1% (T_max 0.5877 against 0.5814) -- corrected 2026-09-04
+# from "0.2%" and "exactly", neither of which the builder has ever printed. The
+# pion yield of a 2-D run built this way has NOT been checked against ALICE.
+#
+# ---------------------------------------------------------------------------
+# `b.dQ` RE-BASELINED 1e-4 -> 5e-4 on 2026-09-05, after the analytic-alpha IC landed.
+# The reasoning and the bound's physical meaning are at the assertion itself; the
+# short version is below. Resolved deliberately, not by nudging until green.
+#
+# ALICE_IC_Creation replaced a tabulated charm A(T) — read from a stale copy of
+# FiVoHydro's own 1-D IC — with the CLOSED FORM of this package's charm EOS. The
+# new IC is strictly more correct: integrating `eos_Pne` over it returns 23.7924
+# charm pairs against the 23.7924 the IC is built to carry (+0.00%), where the
+# table version returned 24.1485 (+1.50%).
+#
+# The drift it costs is NOT a defect in that IC. Demonstrated, not inferred — the
+# same IC with the charm stripped from every cell below T_fo (0.011176 pairs,
+# 9493 cells, T untouched):
+#
+#     IC                                  dQ (N=150, tau=8)     gate
+#     table alpha (pre-2026-09-04)             5.64e-06         19/19
+#     analytic alpha, faithful                 1.15e-04         18/19
+#     analytic alpha, sub-T_fo charm stripped  6.49e-06         19/19
+#
+# So all of the excess comes from charm the IC now places BELOW FREEZE-OUT, in
+# dilute cells (T ~ 0.07, above `T_vac_cut` so they are evolved, far below T_fo so
+# hydro has no business describing them) where the charge sector leaks it. The old
+# IC passed because its A(T) was wrong out there and under-represented that charm
+# by ~96% in the 9-10 fm annulus.
+#
+# CHOSEN: keep the IC faithful (it matches the 1-D pipeline, which also carries charm
+# below T_fo, and cutting it would break the exact-N_charm anchoring), and set this
+# gate's bound to the charm the IC seeds below freeze-out — 4.70e-4 of the total —
+# because that is precisely the matter the cold-edge machinery deletes by design.
+# ---------------------------------------------------------------------------
+#
+# The IC this gate reads was REBUILT on 2026-09-04 after two fixes in
+# ALICE_IC_Creation: a half-bin binning bias in `azimuthal_average` and an
+# ill-conditioned exponent window in `loglog_extended_map`. The collision field and
+# its eccentricities are bit-identical to the previous version -- the deposit never
+# moved -- but T is now up to 16% lower at the fireball edge, so the freeze-out
+# geometry a run on this IC sees has genuinely changed. This gate passes 19/19 on
+# it; G9's regulator-inertness block does NOT (see test_fluctuating_ic2d.jl).
 # ==============================================================================
 
 using Printf
@@ -122,8 +164,33 @@ end
         # So the loss is the PRICE of a stable charge sector. Assert tightly where
         # the edge is well away from the fireball, loosely where it is not, and
         # leave this comment so nobody "fixes" it by loosening the thresholds.
-        @test a.dQ < 1e-4          # N=150, tau=2
-        @test b.dQ < 1e-4          # N=150, tau=8
+        # 2026-09-05: `b` re-baselined 1e-4 -> 5e-4, DELIBERATELY, and the bound is a
+        # physical statement rather than the measured number plus headroom.
+        #
+        # The comment above already had this mechanism right — the cold edge deletes
+        # charge and that is the price of a stable charge sector. What changed is the
+        # INPUT: ALICE_IC_Creation's analytic-alpha IC (2026-09-04) carries exactly the
+        # charm it should (+0.00% against 23.7924 pairs, where the retired table-alpha
+        # version carried +1.50%), and part of getting that right is representing the
+        # n_hard tail past the fireball, which the old A(T) under-represented by ~96%
+        # in the 9-10 fm annulus. More charm at the cold edge, more for the edge to
+        # delete: dQ went 5.64e-06 -> 1.15e-04 at N=150, tau=8.
+        #
+        # Demonstrated, not inferred: the SAME IC with the charm stripped from every
+        # cell below T_fo (0.011176 pairs, 9493 cells, T untouched) returns dQ =
+        # 6.49e-06 and this gate to 19/19. All of the excess is sub-freeze-out charm.
+        #
+        # So the bound is: the drift may not exceed the charm the IC seeds BELOW
+        # FREEZE-OUT, which is 0.011176 / 23.7924 = 4.70e-4 of the total and which the
+        # cold-edge machinery deletes by design. 5e-4 is that number. A drift above it
+        # would be eating charm from matter hydro can actually describe, and that would
+        # be a real defect — which is what this test is for.
+        #
+        # The IC is deliberately NOT cut at T_fo: it matches the 1-D pipeline, which
+        # also carries charm below freeze-out, and cutting it would break the exact
+        # N_charm anchoring the whole normalisation chain rests on.
+        @test a.dQ < 1e-4          # N=150, tau=2 — edge still far from the fireball
+        @test b.dQ < 5e-4          # N=150, tau=8 — see above; measured 1.15e-4
         @test c.dQ < 2e-2          # N=250, tau=8 — edge-loss dominated
         @printf("  charge drift: N=150 tau=2 %.2e | N=150 tau=8 %.2e | N=250 tau=8 %.2e\n",
                 a.dQ, b.dQ, c.dQ)

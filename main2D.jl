@@ -89,12 +89,14 @@ function build_model_2d(; eos = LatticeHRGEOS(),
         Evac = evc
     end
 
-    return IdealDiffVisc2DModel(; eos = eos, layout = L, primrec = IdealPrimRec2D(),
-                                  enable_shear = enable_shear, shear = sh,
-                                  enable_bulk  = enable_bulk,  bulk  = bu,
-                                  enable_diff  = enable_diff,
-                                  E_vac_cut = Evac, r_domain = r_domain,
-                                  filter(p -> p.first !== :E_vac_cut, kwargs)...)
+    m = IdealDiffVisc2DModel(; eos = eos, layout = L, primrec = IdealPrimRec2D(),
+                               enable_shear = enable_shear, shear = sh,
+                               enable_bulk  = enable_bulk,  bulk  = bu,
+                               enable_diff  = enable_diff,
+                               E_vac_cut = Evac, r_domain = r_domain,
+                               filter(p -> p.first !== :E_vac_cut, kwargs)...)
+    reject_unwired_knobs_2d(m)   # see primitives2d.jl — eight 1-D knobs the 2-D solver never reads
+    return m
 end
 
 allocate_state(g::Grid2D, model::IdealDiffVisc2DModel) =
@@ -304,6 +306,7 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
                      on_dump = nothing, dump_dt::Float64 = 0.5,
                      max_steps::Int = 2_000_000, verbose::Bool = false)
 
+    reject_unwired_knobs_2d(model)   # direct struct construction bypasses build_model_2d
     wk   = work === nothing ? make_work(g, model) : work
     step = integrator === :ssprk3 ? step_ssprk3_2d! : step_ssprk2_2d!
 
