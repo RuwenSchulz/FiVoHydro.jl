@@ -342,7 +342,18 @@ const HQ_KAPPA_RESONANCE_FACTOR = parse(Float64, get(ENV, "FIVO_KAPPA_RESONANCE_
 # and provenance (xAct: Julia/tools/derive_hq_consistent.wls 7/7; Fluidum twin gated to 1e-15).
 # A Ref so a driver can toggle per-solve without reloading the module
 # (runner: Tex/MaxEntHydro/run_fivo_consistent.jl; gates: Tex/MaxEntHydro/diag_fivo_consistent_gates.jl).
-const IS2_CONSISTENT_FM = Ref(get(ENV, "FIVO_HQ_CONSISTENT", "0") == "1")
+#
+# ⚠ TWO NAMES, ONE FLAG (documented 2026-09-08). The live production switch is NOT this module's
+# `FIVO_HQ_CONSISTENT` — nothing in phd-git has ever set it; a repo-wide grep finds only this line.
+# O+O production turns the closure on by ASSIGNING THE REF from the project side,
+# `Projects/LangevinPaperOO/is2_dropin.jl:139`, which reads `FIVO_IS2_CONSISTENT` (and refuses to
+# run without OO_IS2_OUT_SUFFIX, so a different closure cannot overwrite the shipped solve).
+# `FIVO_IS2_CONSISTENT` is accepted here too, so reading the module no longer suggests a switch that
+# does nothing. Both default to "0" ⇒ default-off behaviour is unchanged and byte-identical.
+# Pb+Pb does NOT come through here at all: LP1_CLOSURE=consistent resolves Fluidum's
+# :HQ_const_BG_consistent_5f matrix (charm_hydro_consistent), not this module.
+const IS2_CONSISTENT_FM = Ref(get(ENV, "FIVO_IS2_CONSISTENT",
+                                  get(ENV, "FIVO_HQ_CONSISTENT", "0")) == "1")
 # ── Consistent 5-field (2026-08-25): with IS2_CONSISTENT_FM AND use_cM, the c_M back-coupling is
 # applied as an EXPLICIT SOURCE built from the complete abstract-route row (hq_cm_force — includes
 # the hoop-stress and τ-redshift geometric pieces the legacy basis-route matrix entries miss), and

@@ -58,3 +58,48 @@ defaults. Retire it together with `run_ic_diagnostics.sh`, or move its values in
 still on disk, `output/` gitignored); `Projects/FiVoFluidumComparison/data/`'s 8 absolute symlinks
 converted to relative (all 11 verified resolving). `Projects/trash/` (42 retired FiVo consumers,
 1.4 MB) left alone — it is the user's archaeology convention.
+
+---
+
+## E. Second pass (2026-09-08)
+
+Applied in the same spirit as the 2026-08-22 pass: untrack, do not delete; files stay on disk.
+
+| path | what | action | why it is safe |
+|---|---|---|---|
+| ✅ **UNTRACKED** `plots2d/*.png`, `*.pdf` (88 files, 6.9 MB) | every figure written by `plot_benchmarks2d.jl`, `physics2d.jl`, `physics_scans.jl`, `plot2d_evolution.jl`, `exotic_ic2d.jl`, `flow_two_systems.jl`, `plot_gubser2d.jl` | `git rm -r --cached plots2d`, `plots2d/` added to `.gitignore` | **77 % of the tracked repo** (9.0 MB → 2.3 MB, 216 → 128 files). Every reference to `plots2d/` in the repo is either one of those writers or a prose mention in `TWOD_PROGRAM.md`; no manuscript, figure registry or script *reads* a figure. |
+| ⛔ **KEPT TRACKED** `plots2d/flow_two_systems_scan.csv` (28 KB) | NOT a figure — the scan cache, written by `save_cache` and **read back by `load_cache`** (`flow_two_systems.jl:141-170`) | re-added with `git add -f`; `.gitignore` carries a `!` negation for it | Its own docstring: *"so a re-plot does not re-run twelve hydro simulations"*. Untracking it would make a fresh clone pay twelve 2-D solves to redraw one figure. It stores the RAW SERIES and recomputes the derived scalars on load, so a cache written under a wrong read-out cannot survive the fix — which is what makes it safe to track. |
+
+`data/initial_profiles_physical.csv` (52 KB) stays tracked and should: it is a real input, read by
+`main.jl`, `main2.jl`, `main2D.jl`, `bench2d.jl`, `freezeout2d.jl`, `bench/ic_diagnostics.jl` and two
+2-D gates. `data/background2d.jld2` (48 MB) is already untracked by the blanket `*.jld2` rule.
+
+### Not done, and why
+
+- **`mainBGonly.jl`'s ~900 duplicated lines** and the `main2M1.jl` ↔ `main2M2.jl` overlap (§C) are
+  still there. Both are behaviour-changing refactors with live consumers, so they need their own
+  session with the gates run before and after — not a hygiene pass.
+- **`TWOD_PROGRAM.md` (2804 lines)** was left as it is. It is a chronological build log with
+  out-of-order sections (§6c precedes §6a; there are two §6ab) and it is the *record*, which this
+  repo keeps in place. What was missing was a reference entry point, and that is now in `README.md`
+  ("Two solvers in one package") rather than by rewriting the log.
+- **The full 18-gate 2-D ladder is still not in CI.** Only the ~10 s fast tier is (see below).
+  Measured on this machine, 2026-09-08: the full ladder is **18/18 PASS in ≈70 min**, against ~1 min
+  for `Pkg.test()`. Per-gate: shear algebra 2.4 s, primrec 5.2 s, primrec-vs-1d 3.5 s, then **G0
+  Bjorken alone 70 s** — that cliff is where the fast tier stops. Splitting the rest behind a
+  schedule or a label is the obvious next step and has not been done.
+
+### Fixed in the same pass
+
+- `README.md` did not mention the 2-D solver **anywhere** — not `main2D.jl`, not `src2d/`, not
+  `test/run2d_gates.jl`. Half the package (3267 lines) had no front door. Added the entry-point row
+  and the "Two solvers in one package" section.
+- `README.md` did not document the **thermodynamically consistent first moment** at all, although it
+  is O+O's production closure. Added a section, including the two traps below.
+- 🪤 **`FIVO_HQ_CONSISTENT` was a dead flag name.** `main2IS2.jl` read it; nothing in phd-git ever
+  set it. The live switch is `FIVO_IS2_CONSISTENT`, read by `LangevinPaperOO/is2_dropin.jl`, which
+  assigns the `Ref` directly. `main2IS2.jl` now accepts both names (default unchanged, still off).
+- 🪤 **A missing gate file counted as a PASS.** `run2d_gates.jl` printed `SKIP (not present)` and
+  went on to report `N/N gates passed`. A deleted gate would have been invisible. Now a FAIL.
+- `run2d_gates.jl` gained `FIVO2D_TIER=fast` (3 algebra/recovery gates, ~10 s), wired into
+  `.github/workflows/ci.yml` so that `src2d/` has *some* automated cover.

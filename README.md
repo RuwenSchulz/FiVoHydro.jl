@@ -14,6 +14,40 @@ covered by the flat-Cartesian sibling `FiVo2DIdeal` (`Julia/FiVo2DIdeal.jl`, its
 This package is a git submodule of `phd-git`; it is consumed almost entirely by `include`-ing one of
 the driver files below from project scripts run with `--project=Julia/FiVoHydro.jl`.
 
+## Two solvers in one package — read this first
+
+This repository holds **two independent solvers** that share a package but almost no code:
+
+| | 1+1D (radial) | 2+1D (transverse) |
+|---|---|---|
+| driver / module | `main.jl` → `hydro` | `main2D.jl` → `hydro2d` |
+| numerics | `src/` (28 files, ~7.8 k lines) | `src2d/` (14 files, ~3.3 k lines) |
+| geometry | radial Milne `(τ, r)`, axisymmetric | transverse Cartesian Milne `(τ, x, y)`, boost-invariant |
+| charm / IS2 sector | yes (`main2IS2.jl` and the other `main2*.jl`) | **no** |
+| tests | `test/runtests.jl` (`Pkg.test()`, in CI) | `test/run2d_gates.jl` (18 gates; only the ~10 s fast tier is in CI — see below) |
+
+`main2D.jl` includes exactly **five** files from `src/` — `constants.jl`, `utils.jl`, `eos.jl`,
+`primitives.jl` (transport-coefficient models only) and `relaxation_laws.jl`. Everything that knows
+about dimensionality — grid, primitive recovery, fluxes, reconstruction, RHS, timestepper,
+dissipation, floors, boundary conditions — is **re-implemented** in `src2d/`.
+
+That duplication is deliberate, and `main2D.jl`'s header states the reason: *"main.jl and src/ are
+NOT touched by this module — the 1-D production path stays bit-identical so every published number
+remains reproducible."* Three gates police the overlap rather than the source sharing it:
+`test_primrec2d_vs_1d.jl`, `test_reproduction2d.jl` and `test_dissipative_vs_1d.jl` compare the two
+solvers on a common locus. `src2d/transport2d.jl` also re-states two pure functions from
+`src/dissipation.jl` (noted in `test_charge2d.jl`).
+
+The 2-D solver reads **no ENV variables at all** — it is configured purely by keyword arguments,
+unlike the 1-D bulk and charm solvers. This is why `ENV_FLAGS.md` lists nothing from `src2d/`.
+
+⚠ **`FiVo2DIdeal` is a third, unrelated codebase** (`Julia/FiVo2DIdeal.jl`, its own submodule and its
+own git repo): flat Minkowski, ideal only, one 839-line file, `Printf` its only dependency. It shares
+no code with this package. "2-D FiVo" is ambiguous between it and `hydro2d` — say which you mean.
+
+Design, derivation and the full 2-D validation record: `TWOD_PROGRAM.md` (a chronological build log,
+not a reference manual — sections are in the order they were written, including retractions).
+
 ## Entry points
 
 | file | module | physics | primary consumer |
@@ -28,9 +62,10 @@ the driver files below from project scripts run with `--project=Julia/FiVoHydro.
 | `mainDensityFrame.jl` | — | thin driver: `charge_mode=:density_frame` (ν-less parabolic flux) then `hydro.main()` | DensityFrame project |
 | `mainJonly.jl`, `mainJonly2nd.jl` | — | charge-only variants used by AttractorPaper5 / `Julia/tools/diag_piQ_*` | legacy |
 | `mainBGonly.jl` | `hydro_bgonly` | background-only copy of `main.jl` (≈900 duplicated lines) — kept: it is MainFiVo's `:background_only` pipeline mode (`Code/case_specs.jl:81`) | MainFiVo |
+| **`main2D.jl`** | **`hydro2d`** | **the 2+1D solver** (transverse Cartesian, boost-invariant Milne): bulk + charge `(T, u^x, u^y, Π, π^{xx}, π^{xy}, π^{yy}, π^{ηη}, n, ν^x, ν^y)` via `run_sim_2d!`. Includes all of `src2d/`. **No charm/IS2 sector.** | `tools/export_background2d.jl`; the 18-gate ladder `test/run2d_gates.jl` |
 | `src/FiVoHydro.jl` | `FiVoHydro` | package wrapper: includes `main.jl`, exports `hydro` (only `Projects/SoftPionPaper` uses `import FiVoHydro`) | — |
 
-`src/` (27 files) is the bulk solver: `eos.jl` (ConformalHQEOS, LatticeHRGEOS, TabulatedHQEOS),
+`src/` (28 files, incl. the `FiVoHydro.jl` package shim) is the bulk solver: `eos.jl` (ConformalHQEOS, LatticeHRGEOS, TabulatedHQEOS),
 `primitives.jl` (`IdealDiffViscModel`, viscosity models), `primrec.jl` (3-unknown Newton recovery),
 `fluxes.jl`/`reconstruction.jl`/`rhs.jl`/`timestepper.jl` (the FV scheme), `dissipation.jl` (transport
 coefficients, `relax_dissipative!`, all stabilizers), `mood.jl`, `floors.jl`, `io.jl`, `gubser.jl`
@@ -83,6 +118,30 @@ julia Julia/FiVoHydro.jl/tools/list_env_flags.jl > Julia/FiVoHydro.jl/ENV_FLAGS.
 `test_is2_drive.jl` (the intra-cell drive term), `test_density_frame_flux.jl`, `test_bdnk_causal.jl`,
 `test_is2_causality.jl` and `test_m1_gates.jl` (the 9-gate M1 ladder). CI: `.github/workflows/ci.yml`.
 
+**There are two test ladders, and CI runs only the first.**
+
+```sh
+julia --project=Julia/FiVoHydro.jl -e 'using Pkg; Pkg.test()'                    # 1-D, ~1 min, IN CI
+julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run2d_gates.jl  # 2-D, 18 gates, NOT in CI
+```
+
+`test/run2d_gates.jl` is the whole 2+1D validation ladder — shear-closure algebra, primitive recovery
+(and recovery vs 1-D on the production locus), G0/G0b Bjorken, G1/G1v Gubser ideal and viscous, Gs
+sound, G2 shear+bulk, G3/G3g charge, Gk charge dispersion, G4 reproduction vs 1-D production,
+G5 all-sectors production IC, G6 non-axisymmetric, G7 dissipative vs 1-D, G8 un-averaged and G9
+fluctuating ICs. Each gate runs in its own subprocess (several include both `main.jl`-side files and
+`main2D.jl`, whose modules would collide in one session) and the script exits 1 if any fails, so it
+is already usable as a CI step.
+
+Last full run: **18/18 PASS, ≈70 min** (2026-09-08). The full ladder is too slow to put in CI as it
+stands — ~70 min against ~1 min for `Pkg.test()` — so CI runs only `FIVO2D_TIER=fast`: the three
+algebra and primitive-recovery gates, **~10 s**, no time evolution. Treat that as a smoke test; it
+cannot see the timestepper, the fluxes or the regulators. **Run the full ladder by hand after
+touching `src2d/` or `main2D.jl`.** (Per-gate cost: the three fast gates are 2.4 / 5.2 / 3.5 s, then
+G0 Bjorken alone is 70 s — that cliff is where the fast tier stops. Splitting the remainder behind a
+schedule or a label is the obvious next step and has not been done.) What each gate is for and what
+it measured: `TWOD_PROGRAM.md` §6.
+
 ## Stabilizers (bulk solver) — all OFF by default
 
 The shipped defaults exercise the bare scheme; FiVoBenchmark's D1 audit shows the validated
@@ -134,6 +193,53 @@ none of this. The full record:
 - `Projects/FiVoBenchmark/CAUSAL_HYDRO_AUDIT.md` — BDNK/IS2 causality audit; "BDNK" charge sector is parabolic in practice (B-2, open).
 - `Tex/HeavyQuarkHydro/MAXENT_M1_PROGRAM.md` — why M1 retires the regulators.
 - `Projects/LangevinPaperOO/README.md` — the withdrawn "Fluidum is unstable on O+O" claims (2026-08-18).
+
+## The thermodynamically consistent first moment (full ∇P)
+
+`src/hq_consistent_firstmoment.jl` implements the **full-∇P (thermodynamically consistent) first
+moment** for the charm sector, transcribed from the xAct derivation
+`Julia/tools/derive_hq_consistent.wls` (7/7 gates) and the twin of Fluidum's
+`src/Matrix/HQ_const_BG_consistent.jl`. The shipped first-moment row is the homogeneous-rest-frame
+reduction of `(D_s/T) Δ^r_λ ∇_μ T_Q^{μλ} + ν^r = 0`; dropping the homogeneity step adds five source
+terms (∇⊥T pressure gradient, `τ_n n a^r` inertial, `τ_n (ν·∇u)^r`, expansion + `D ln h`, geometric
+dilution). All five vanish in the frame the shipped derivation was performed in, and on an *ideal*
+baryon-free background the first two cancel by Euler — which is why the shipped fugacity drive works
+there and fails on a viscous background.
+
+**It is production for O+O.** ⚠ Two things about this are easy to get wrong:
+
+1. **The live switch is not the module's own ENV var.** `main2IS2.jl:345` defines
+   `IS2_CONSISTENT_FM = Ref(get(ENV, "FIVO_HQ_CONSISTENT", "0") == "1")`, but **nothing in the repo
+   ever sets `FIVO_HQ_CONSISTENT`** — grepping for it finds only its own definition. The switch that
+   is actually used is `FIVO_IS2_CONSISTENT`, read by
+   `Projects/LangevinPaperOO/is2_dropin.jl:139`, which assigns the `Ref` directly. Two names for one
+   flag; only the project-side one is live.
+2. **Pb+Pb and O+O reach "consistent" through different codes.** `LP1_CLOSURE=consistent` (the LP1
+   default) resolves `charm_hydro_consistent`, which runs **Fluidum's**
+   `:HQ_const_BG_consistent_5f` matrix — not this package. `OO_CLOSURE=consistent` (the O+O default)
+   resolves `charm_hydro_oo_consistent`, which is **FiVo's** `IS2_CONSISTENT_FM`. So this file is on
+   the production path for O+O only.
+
+Scope, and what is *not* corrected:
+
+- The consistent projection corrects the **first** moment only. The second-moment sources stay the
+  shipped ones, so a consistent run carries shipped `c_M` sources riding on a consistent `(α, ν^r)`;
+  `Tex/MaxEntHydro/diag_lp1_deltacm.jl` and `oo_deltacm_corrected` measure the residual.
+- Second-moment **back-coupling is off in production** (`use_cM` defaults to `"0"`). With
+  `IS2_CONSISTENT_FM` *and* `use_cM` both on, the matrix `c_M` is zeroed and the coupling is applied
+  as a source instead (`main2IS2.jl:958`).
+- Not every product has a consistent twin, and the exceptions are named rather than silently falling
+  back: the `c_M` variant bundle, the analytic τ₀ second-moment IC (closure-independent by
+  construction), and `case == "ideal"` (at `D_sT → 0` there is no current for a drive to act on).
+- **The 2-D solver has no consistent first moment**, and no charm sector at all — `main2D.jl` does
+  not include `is2_second_moment_builder.jl` or `hq_consistent_firstmoment.jl`. This is a gap in
+  `hydro2d`, not on the O+O production path.
+
+Gates: `Tex/MaxEntHydro/diag_fivo_consistent_gates.jl` (24 xAct reference points shared with the
+Fluidum gates, the `h == m K₃/K₂` tie, the identity `n + T dn/dT == n h/T`, and a cross-code
+comparison against Fluidum's `hqc_matrices` on the real production background);
+`Projects/LangevinPaperOO/diag_oo_consistent_control.jl` (charm conserved to 0.4 % over the physical
+region). Runner for the Pb+Pb-side comparison: `Tex/MaxEntHydro/run_fivo_consistent.jl`.
 
 ## Environment flags
 

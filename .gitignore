@@ -7,3 +7,8 @@ debug_flux/
 debug_primfail/
 *.jld2
 *.jls
+
+# generated 2-D figure output (regenerable: plot_benchmarks2d.jl, physics2d.jl,
+# physics_scans.jl, plot2d_evolution.jl, exotic_ic2d.jl, flow_two_systems.jl, plot_gubser2d.jl)
+plots2d/
+!plots2d/flow_two_systems_scan.csv
