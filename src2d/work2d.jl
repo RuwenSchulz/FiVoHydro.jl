@@ -41,6 +41,10 @@ mutable struct Work2D
     # channel and D ln h). NaN-seeded like the others; with no previous step both
     # terms that use it are dropped rather than differenced against a fiction.
     T_prev::Vector{Float64}
+    # ν history, for the ∂_τν the charm second moment's σ_(ν) needs. NaN-seeded
+    # like the rest; with no previous step the ∂_τ pieces are dropped.
+    nux_prev::Vector{Float64}
+    nuy_prev::Vector{Float64}
 
     # MUSCL slopes and face states, per direction
     sigx::Matrix{Float64}
@@ -117,7 +121,7 @@ function Work2D(nvar::Int, Ntot::Int; nthreads::Int = Threads.maxthreadid())
     Work2D(
         vec(), vec(), vec(), vec(), vec(), vec(), vec(), vec(), vec(), falses(Ntot),
         nanv(), nanv(), nanv(), nanv(),
-        nanv(), nanv(), nanv(), nanv(),
+        nanv(), nanv(), nanv(), nanv(), nanv(), nanv(),
         pmat(), pmat(), pmat(), pmat(), pmat(), pmat(),
         mat(), mat(), mat(), mat(),
         mat(), mat(),

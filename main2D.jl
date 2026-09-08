@@ -79,7 +79,8 @@ function build_model_2d(; eos = LatticeHRGEOS(),
                           kwargs...)
     L = make_layout2d(; with_charge = with_charge,
                         with_bulk   = enable_bulk,
-                        with_shear  = enable_shear)
+                        with_shear  = enable_shear,
+                        with_m2     = get(kwargs, :consistent_m2, false))
     sh = enable_shear ? QGPViscosity(eta_over_s, tauShear_coeff) : ZeroViscosity()
     bu = enable_bulk  ? SimpleBulkViscosity(zeta_over_s, tauPi_coeff) : ZeroBulkViscosity()
 
@@ -342,7 +343,8 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
         # NaN marks "no previous step": kinematics_2d then drops the ∂_τ u^i pieces
         # on the first relaxation substep rather than differencing against zero.
         fill!(wk.ux_prev, NaN); fill!(wk.uy_prev, NaN); fill!(wk.alpha_prev, NaN)
-        fill!(wk.T_prev, NaN)     # ∂_τT, read only by the consistent first moment
+        fill!(wk.T_prev, NaN)     # ∂_τT, read by the consistent first/second moments
+        fill!(wk.nux_prev, NaN); fill!(wk.nuy_prev, NaN)   # ∂_τν, charm second moment
     end
 
     # one RHS pass to populate primitives and signal speeds before the first dt

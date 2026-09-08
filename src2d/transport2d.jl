@@ -153,3 +153,28 @@ between. Mirrors `main2IS2.jl:_vacuum_weight` (absolute-n branch).
     n >= hi && return 1.0
     return (n - lo)/(hi - lo)
 end
+
+"""
+    tauM_charm_2d(T, τn) / ηM_charm_2d(T, τn)
+
+The charm SECOND-moment relaxation time and shear coefficient, tied to the row's
+own `τ_n` exactly as the 1-D chain ties them:
+
+    τ_M = τ_n K₄K₂/(2K₃²),      η_M = T τ_n/2.
+
+Measured identical to FiVo's 1-D closed form
+`(D_s/2)(6zK₁+(z²+24)K₂)/(zK₁+4K₂)` to 2e-16 over T ∈ [0.1, 0.6] — they are
+Bessel identities of each other (gate C0 of converge_1p1d_consistent.jl). Tying
+them to τ_n rather than rebuilding from D_s is what keeps the ratio τ_M/τ_n
+correct if τ_n's normalisation is ever audited again.
+"""
+@inline function tauM_charm_2d(T::Float64, τn::Float64)
+    Tm = max(T, T_MIN); z = 1.5 / Tm
+    K2 = SpecialFunctions.besselkx(2, z); K3 = SpecialFunctions.besselkx(3, z)
+    K4 = SpecialFunctions.besselkx(4, z)
+    abs(K3) <= TINY && return 0.0
+    v = τn * K4 * K2 / (2 * K3 * K3)
+    return isfinite(v) && v > 0 ? v : 0.0
+end
+
+@inline ηM_charm_2d(T::Float64, τn::Float64) = max(T, T_MIN) * τn / 2

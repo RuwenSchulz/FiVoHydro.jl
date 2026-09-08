@@ -41,10 +41,17 @@ struct StateLayout2D
     iPixy::Int
     iPiyy::Int
     iPieta::Int
+
+    hasM2::Bool
+    iPQxx::Int
+    iPQxy::Int
+    iPQyy::Int
+    iPQeta::Int
+    iPiQ::Int
 end
 
 """
-    make_layout2d(; with_charge=true, with_bulk=true, with_shear=true)
+    make_layout2d(; with_charge=true, with_bulk=true, with_shear=true, with_m2=false)
 
 Build the state layout. The conserved four are always present; each dissipative
 sector can be switched off, which removes its fields from the state vector
@@ -52,11 +59,15 @@ entirely (rather than carrying zeros) so that ideal-fluid gates run the bare
 scheme. Field order is fixed and dense.
 """
 function make_layout2d(; with_charge::Bool = true, with_bulk::Bool = true,
-                         with_shear::Bool = true)
+                         with_shear::Bool = true, with_m2::Bool = false)
     names = Symbol[:Dtau, :Sx, :Sy, :E]
     with_charge && append!(names, (:nux, :nuy))
     with_bulk   && push!(names, :Pi)
     with_shear  && append!(names, (:pixx, :pixy, :piyy, :pieta))
+    # The CHARM second moment (consistent_m2). Same four-dof storage as the medium
+    # shear plus the trace channel; passive at c_M = 0, so these are advected and
+    # relaxed but never enter primitive recovery or the fluxes.
+    with_m2     && append!(names, (:pQxx, :pQxy, :pQyy, :pQeta, :PiQ))
 
     idx = Dict(s => i for (i, s) in pairs(names))
 
@@ -67,6 +78,8 @@ function make_layout2d(; with_charge::Bool = true, with_bulk::Bool = true,
         with_bulk,   get(idx, :Pi, 0),
         with_shear,  get(idx, :pixx, 0), get(idx, :pixy, 0),
                      get(idx, :piyy, 0), get(idx, :pieta, 0),
+        with_m2,     get(idx, :pQxx, 0), get(idx, :pQxy, 0),
+                     get(idx, :pQyy, 0), get(idx, :pQeta, 0), get(idx, :PiQ, 0),
     )
 end
 

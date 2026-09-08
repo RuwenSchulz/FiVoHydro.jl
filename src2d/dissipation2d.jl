@@ -493,6 +493,63 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
 
                 U[L.iNux,i] = stored_from_phys(nux)
                 U[L.iNuy,i] = stored_from_phys(nuy)
+
+                # ── THE CHARM SECOND MOMENT (src2d/hq_consistent_m2_2d.jl) ────────
+                # Passive at c_M = 0: it reads the current and the medium but feeds
+                # back into neither, so it relaxes here and never enters primitive
+                # recovery or the fluxes. Backward Euler on the same pattern as the
+                # medium shear, with the source supplying the drive.
+                if model.consistent_m2 && L.hasM2
+                    pQxx = phys_from_stored(U[L.iPQxx,i]); pQxy = phys_from_stored(U[L.iPQxy,i])
+                    pQyy = phys_from_stored(U[L.iPQyy,i]); pQeta = phys_from_stored(U[L.iPQeta,i])
+                    PiQv = phys_from_stored(U[L.iPiQ,i])
+                    τMq = tauM_charm_2d(T, τn)
+                    if τMq > 0.0
+                        # a_ν^i = Dν^i, from the pre-relaxation snapshot so every
+                        # cell sees the same stage (the reason `Q` exists).
+                        dtnx = isfinite(work.nux_prev[i]) ? (nux - work.nux_prev[i])/Δ : 0.0
+                        dtny = isfinite(work.nuy_prev[i]) ? (nuy - work.nuy_prev[i])/Δ : 0.0
+                        ixm = i - g.Nytot; ixp = i + g.Nytot
+                        dxnx = (phys_from_stored(Q[L.iNux,ixp]) - phys_from_stored(Q[L.iNux,ixm]))*0.5*invdx
+                        dxny = (phys_from_stored(Q[L.iNuy,ixp]) - phys_from_stored(Q[L.iNuy,ixm]))*0.5*invdx
+                        dynx = (phys_from_stored(Q[L.iNux,i+1]) - phys_from_stored(Q[L.iNux,i-1]))*0.5*invdy
+                        dyny = (phys_from_stored(Q[L.iNuy,i+1]) - phys_from_stored(Q[L.iNuy,i-1]))*0.5*invdy
+                        dtux2 = isfinite(work.ux_prev[i]) ? (ux - work.ux_prev[i])/Δ : 0.0
+                        dtuy2 = isfinite(work.uy_prev[i]) ? (uy - work.uy_prev[i])/Δ : 0.0
+                        aνx = uτ*dtnx + ux*dxnx + uy*dynx
+                        aνy = uτ*dtny + ux*dxny + uy*dyny
+                        nut2 = nu_tau_2d(ux, uy, uτ, nux, nuy)
+                        θν  = (ux*dtnx + uy*dtny + nux*dtux2 + nuy*dtuy2)*safe_inv(uτ) +
+                              dxnx + dyny + nut2*safe_inv(τ)
+                        # T gradients, computed here so the m2 sector does not
+                        # depend on the consistent_fm block having run.
+                        Tp2   = work.T_prev[i]
+                        dtT2  = isfinite(Tp2) ? (T - Tp2)/Δ : 0.0
+                        dxT2  = (exp(work.yT[ixp]) - exp(work.yT[ixm]))*0.5*invdx
+                        dyT2  = (exp(work.yT[i+1]) - exp(work.yT[i-1]))*0.5*invdy
+                        h2, hp2 = hq_h_hprime_2d(T, model.eos)
+                        Ds2 = safe_div(model.kappa_coeff, T) / fmGeV
+                        sxx, sxy, syy, sB = consistent_m2_source_2d(
+                            ux, uy, uτ, τ, T, dxT2, dyT2, dtT2,
+                            nux, nuy, pQxx, pQxy, pQyy, pQeta, PiQv,
+                            dta, dxa, dya, θν, aνx, aνy, dtnx, dtny,
+                            dxnx, dxny, dynx, dyny,
+                            θ, ax, ay, dtux2, dtuy2, dxux, dxuy, dyux, dyuy,
+                            n, τn, Ds2, h2, hp2, τMq, ηM_charm_2d(T, τn), hq_mass(model.eos))
+                        A2 = safe_div(τMq*uτ, Δ)
+                        pQxx = (A2*pQxx + τMq*uτ*sxx) / (A2 + 1)
+                        pQxy = (A2*pQxy + τMq*uτ*sxy) / (A2 + 1)
+                        pQyy = (A2*pQyy + τMq*uτ*syy) / (A2 + 1)
+                        PiQv = (A2*PiQv + τMq*uτ*sB)  / (A2 + 1)
+                        # tracelessness: correct pQeta alone, as the medium shear does
+                        pQeta, _ = project_shear_traceless_2d(ux, uy, uτ, pQxx, pQxy, pQyy, pQeta)
+                        U[L.iPQxx,i]  = stored_from_phys(pQxx)
+                        U[L.iPQxy,i]  = stored_from_phys(pQxy)
+                        U[L.iPQyy,i]  = stored_from_phys(pQyy)
+                        U[L.iPQeta,i] = stored_from_phys(pQeta)
+                        U[L.iPiQ,i]   = stored_from_phys(PiQv)
+                    end
+                end
             end
         end
     end
@@ -504,11 +561,18 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
     # over the step, matching src/dissipation.jl's note that refreshing it on entry
     # makes ∂_τα ≡ 0 and under-drives ν by ~2x.
     copyto!(work.alpha_prev, work.alpha)
+    # ν history for the charm second moment's ∂_τν, on the same schedule.
+    if model.consistent_m2 && model.layout.hasNu
+        @inbounds for j in 1:g.Ntot
+            work.nux_prev[j] = phys_from_stored(U[model.layout.iNux, j])
+            work.nuy_prev[j] = phys_from_stored(U[model.layout.iNuy, j])
+        end
+    end
     # T_prev, for the consistent first moment's ∂_τT. Stored on the same schedule
     # as alpha_prev (AFTER the substep, so the difference is a genuine backward
     # difference over the step) and only when that closure is on, so a shipped run
     # never pays for it. yT = log T is what the work array carries.
-    if model.consistent_fm
+    if model.consistent_fm || model.consistent_m2
         @inbounds for j in eachindex(work.T_prev)
             work.T_prev[j] = exp(work.yT[j])
         end
