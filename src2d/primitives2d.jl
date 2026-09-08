@@ -229,19 +229,6 @@ function reject_unwired_knobs_2d(m::IdealDiffVisc2DModel)
     # time and the enthalpy inside its own sources are on different clocks — a
     # silent inconsistency confined to the sources. Refuse it, in the same style as
     # the unwired knobs above, rather than let it run.
-    # 🔴 consistent_m2 is INCOMPLETE (src2d/hq_consistent_m2_2d.jl: sigma_nu_2d is
-    # built by a false analogy with the u-shear and gate Gm1 fails at 65 %). Refuse
-    # it rather than let a wrong closure run — the LangevInMedium-0.2.3 style this
-    # file already uses for the unwired knobs.
-    if m.consistent_m2
-        error("IdealDiffVisc2DModel: `consistent_m2 = true` is NOT READY. The 2-D consistent " *
-              "second moment's sigma_(nu) is incomplete (test_consistent_m22d.jl gate Gm1 fails " *
-              "at 65 % on p_l): it is built by analogy with the u-shear, which omits the " *
-              "connection terms the true sigma_(nu) carries. See the header of " *
-              "src2d/hq_consistent_m2_2d.jl for what IS established (geometry 9/9, background " *
-              "sector exact to 3e-15) and what remains.")
-    end
-
     if m.consistent_fm && m.tauN_coeff != 1.0
         error("IdealDiffVisc2DModel: `tauN_coeff = $(m.tauN_coeff)` cannot be combined with " *
               "`consistent_fm = true`. The consistent first moment relies on τ_n = D_s·h/T with " *

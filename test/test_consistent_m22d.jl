@@ -28,8 +28,10 @@
 # Gm3  TRACELESSNESS is preserved: the assembled traceless sources must have zero
 #      transverse trace against the projector, so the constraint the solver
 #      restores each step is not being fought by the RHS.
-# Gm4  the BJORKEN limit: at rest with no transverse gradients the tensor sector
-#      must vanish and the trace must reduce to the 1-D scalar answer.
+# Gm4  the BJORKEN limit: at rest with no transverse gradients x and y are
+#      equivalent, so dpxx == dpyy exactly and dpxy == 0 exactly. (The block is
+#      NOT zero — σ^{xx} = σ^{yy} = −θ/3 there — and expecting zero was this
+#      gate's own first error.)
 # Gm5  the flag is INERT when off and NOT inert when on, on a real 2-D solve.
 # ==============================================================================
 
@@ -117,8 +119,8 @@ function twod_in_1d_limit(; τ, r, ur, T, dtT, drT, drur, dtur,
     return H2.consistent_m2_source_2d(ux, uy, uτ, τ, T, drT, 0.0, dtT,
                                       ν, 0.0, pxx_in, 0.0, p_φ, peta, PiQ,
                                       dtα, drα, 0.0,
-                                      θν, aνx, aνy, dxνx, dxνy, dyνx, dyνy,
-                                      θ, ax, ay, dxux, dxuy, dyux, dyuy,
+                                      θν, aνx, aνy, dtν, 0.0, dxνx, dxνy, dyνx, dyνy,
+                                      θ, ax, ay, dtur, 0.0, dxux, dxuy, dyux, dyuy,
                                       n, τn, Ds, h, hp, τM, ηM, m)
 end
 
@@ -194,23 +196,25 @@ function gate_Gm2()
     n, τn, Ds, h, hp, τM, ηM, m = 1.1, 0.55, 0.35, 2.1, -1.0, 0.30, 0.29, 1.5
     θ = dtuτ + (G[1,1] + G[2,2]) + uτ/τ
 
-    function ev(u, ν, gTv, Gm, Gnu, Pm, av, aνv, dαv)
+    dtu0 = [0.03, 0.01]; dtν0 = [1.0e-4, -0.6e-4]
+    function ev(u, ν, gTv, Gm, Gnu, Pm, av, aνv, dαv, dtuv, dtνv)
         peta, _ = H2.project_shear_traceless_2d(u[1], u[2], uτ, Pm[1,1], Pm[1,2], Pm[2,2], 0.0)
         H2.consistent_m2_source_2d(u[1], u[2], uτ, τ, T, gTv[1], gTv[2], dtT,
                                    ν[1], ν[2], Pm[1,1], Pm[1,2], Pm[2,2], peta, PiQ,
                                    dtα, dαv[1], dαv[2],
-                                   θν, aνv[1], aνv[2],
+                                   θν, aνv[1], aνv[2], dtνv[1], dtνv[2],
                                    Gnu[1,1], Gnu[1,2], Gnu[2,1], Gnu[2,2],
-                                   θ, av[1], av[2], Gm[1,1], Gm[1,2], Gm[2,1], Gm[2,2],
+                                   θ, av[1], av[2], dtuv[1], dtuv[2],
+                                   Gm[1,1], Gm[1,2], Gm[2,1], Gm[2,2],
                                    n, τn, Ds, h, hp, τM, ηM, m)
     end
 
-    s0 = ev([ux,uy], [νx,νy], gT, G, Gν, P, a, aν, dα)
+    s0 = ev([ux,uy], [νx,νy], gT, G, Gν, P, a, aν, dα, dtu0, dtν0)
     S0 = [s0[1] s0[2]; s0[2] s0[3]]
     worst = 0.0
     for φ in (0.3, 1.0, 2.4, -0.8)
         c, s = cos(φ), sin(φ); R = [c -s; s c]
-        s2 = ev(R*[ux,uy], R*[νx,νy], R*gT, R*G*R', R*Gν*R', R*P*R', R*a, R*aν, R*dα)
+        s2 = ev(R*[ux,uy], R*[νx,νy], R*gT, R*G*R', R*Gν*R', R*P*R', R*a, R*aν, R*dα, R*dtu0, R*dtν0)
         S2 = [s2[1] s2[2]; s2[2] s2[3]]
         expect = R*S0*R'
         d = maximum(abs.(S2 .- expect)) / max(maximum(abs.(S0)), 1e-300)
@@ -235,8 +239,10 @@ function gate_Gm3()
     s = H2.consistent_m2_source_2d(ux, uy, uτ, τ, 0.30, -0.02, 0.01, -0.05,
                                    1.0e-3, 5.0e-4, P[1,1], P[1,2], P[2,2], peta, 2.0e-4,
                                    0.04, 0.01, -0.01, 2.0e-4, 1.0e-4, -5.0e-5,
+                                   8.0e-5, -3.0e-5,
                                    3.0e-4, -1.0e-4, 2.0e-4, 1.0e-4,
-                                   0.9, 0.03, -0.02, 0.08, -0.04, 0.02, 0.06,
+                                   0.9, 0.03, -0.02, 0.02, 0.01,
+                                   0.08, -0.04, 0.02, 0.06,
                                    1.0, 0.5, 0.3, 2.2, -1.0, 0.25, 0.24, 1.5)
     # The transverse trace of the source block, projected the way the constraint is.
     tr_new, _ = H2.project_shear_traceless_2d(ux, uy, uτ, s[1], s[2], s[3], 0.0)
@@ -260,13 +266,19 @@ function gate_Gm4()
     s = H2.consistent_m2_source_2d(0.0, 0.0, uτ, τ, T, 0.0, 0.0, 0.0,
                                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                   0.0, 0.0,
                                    0.0, 0.0, 0.0, 0.0,
-                                   θ, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                   θ, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                                    1.0, 0.7, 0.4, 2.2, -1.0, 0.25, 0.24, 1.5)
-    @printf("  (dpxx, dpxy, dpyy) = (%.3e, %.3e, %.3e)   dPiQ = %+.6e\n", s[1], s[2], s[3], s[4])
-    @test abs(s[1]) < 1e-12 && abs(s[2]) < 1e-12 && abs(s[3]) < 1e-12
-    # The trace is NOT zero: the (ii) background-bulk term drives it even at rest,
-    # which is the same statement the 1-D file makes.
+    @printf("  (dpxx, dpxy, dpyy) = (%.6e, %.3e, %.6e)   dPiQ = %+.6e\n", s[1], s[2], s[3], s[4])
+    # ⚠ The transverse block is NOT zero, and expecting it to be was this gate's
+    # own error. For Bjorken σ^{xx} = σ^{yy} = −θ/3 ≠ 0 (only the FULL σ^{μν} is
+    # traceless, via σ^η_η = u^τ/τ − θ/3 = +2θ/3), so the (ii) term 2η̄σ^{ij}
+    # legitimately drives it. The 1-D file does the same thing in its own chart.
+    # What Bjorken DOES fix is the symmetry: x and y are equivalent, so
+    #   dpxx == dpyy exactly, and dpxy == 0 exactly.
+    @test isapprox(s[1], s[3]; rtol = 1e-14)
+    @test abs(s[2]) < 1e-14 * max(abs(s[1]), 1.0)
     @test isfinite(s[4])
     return 0.0
 end

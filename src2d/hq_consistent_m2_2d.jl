@@ -79,44 +79,38 @@
 # `consistent_fm`, so the two moments can be attributed separately.
 #
 # -----------------------------------------------------------------------------
-# 🔴 INCOMPLETE — DO NOT ENABLE. WHAT IS DONE AND WHAT IS NOT (2026-09-08)
+# WHAT WAS WRONG BEFORE IT PASSED (2026-09-08) — five errors, all one family
 # -----------------------------------------------------------------------------
-# The flag exists and the file loads, but `sigma_nu_2d` below is WRONG and gate
-# Gm1 (test_consistent_m22d.jl) fails on it. Nothing may be run with
-# consistent_m2 = true until that is closed.
+# Gate Gm1 (the axisymmetric reduction) took this file from 65 % to 2.3e-15 in
+# five steps. FOUR of the five were the SAME mistake: contracting or tracing
+# CONTRAVARIANT components as if they were orthonormal, i.e. forgetting that
+# lowering an index on a u-orthogonal tensor brings in its τ-row.
 #
-# ESTABLISHED, and gated:
-#   * the GEOMETRY and algebraic structure — derive_hq_m2_2p1d.wls, 9/9: the
-#     tau-row is determined by orthogonality, tracelessness fixes pieta (and the
-#     .wls confirms that formula is algebraically identical to
-#     `project_shear_traceless_2d`'s), Delta-projected D pi is quasi-linear.
-#   * the FIELD COUNT: 3 independent dofs stored as 4, exactly the medium
-#     shear's convention, so `shear_tensor_contravariant_2d` and
-#     `project_shear_traceless_2d` are reused rather than restated.
-#   * the BACKGROUND sector is EXACT against the 1-D reduction: with the fields
-#     and nu zero, every gradient combination reproduces
-#     `hq_consistent_m2_rhs` to 3e-15, at u^r up to -2.5. So theta, sigma, the
-#     eta-bar term, D ln C, D ln T and the geometric pieces are all right.
-#   * the FIELD-PROPORTIONAL terms are nearly exact: Pi_Q to 1e-15, and the
-#     pi:sigma couplings to 1.4e-3 / 5.8e-4.
+#   1. σ_(ν) built BY ANALOGY with the u-shear — 65 %. The projector acting on
+#      ∇^{(a}ν^{b)} drags in gradients of U through ν^τ = (u·ν_⊥)/u^τ. FIXED by
+#      generating it (derive_signu_2p1d.wls, 3/3).
+#   2. the class-(iv) rank-1 block symmetrised and traced by hand — 2.69x in the
+#      φ channel. FIXED by `rank1_traceless_2d`, generated.
+#   3. π:σ as `pxx σxx + 2 pxy σxy + pyy σyy + peta σeta` — 3-5 % on Π_Q.
+#      Needs both indices lowered. Generated.
+#   4. the (iii) coupling π^{(i}_λ σ^{j)λ} contracted over transverse indices
+#      only — sub-1 % on p_l. Needs the metric. Generated.
+#   5. a·ν and ν·∇(Th) as `ax νx + ay νy` — they carry −(a·u)(ν·u)/(u^τ)².
+#   6. the π:σ trace subtracted as a bare `πσ/3` instead of `Δ^{ij} πσ/3` —
+#      the last 0.006-0.57 % on p_l.
 #
-# 🔴 NOT DONE — `sigma_nu_2d`:
-#   With nu != 0 and every other input zero, gate Gm1 measures 65 % on p_l and
-#   9 % on p_phi. The cause is identified: this file builds sigma_(nu) BY ANALOGY
-#   with `ns_shear_target_2d` (the shear of u), and that analogy is false. The
-#   1-D file carries
-#       (grad nu)_ll = D_l nu^r / u^tau - u^r nu (D_l u^r)/u^tau^3
-#   whose SECOND term is the connection piece from parallel-transporting l — it
-#   involves gradients of U, not of nu, and has no counterpart in the u-shear.
-#   The exact Cartesian sigma_(nu)^{ij} was derived symbolically (the scratch
-#   .wls of this session) and is a large expression carrying u-gradient terms
-#   this implementation omits entirely.
+# ⛔ THE LESSON, written here because it will recur in any further 2-D tensor
+# sector: in the 1-D chart every field is an ORTHONORMAL triad component, so
+# contractions look like plain products and the metric is invisible. In the
+# Cartesian chart the stored fields are CONTRAVARIANT and every contraction,
+# trace and symmetrisation needs the metric explicitly. Generate them; do not
+# transcribe the 1-D forms.
 #
-# THE FIX is to generate sigma_(nu)^{ij} from the symbolic derivation into Julia
-# rather than hand-writing it, exactly as HQ_2p1d_BG_generated.jl is generated
-# from derive_hq_2p1d.wls. That is the next step and it is mechanical; what is
-# NOT safe is to keep patching the analogy by hand.
+# The gate that caught all six is the 1-D limit. Rotational covariance (Gm2,
+# 7.8e-16) catches a different class — an x/y transposition — that the 1-D limit
+# is structurally blind to, because it has one transverse direction.
 # =============================================================================
+
 
 """
     hq_m2_coeffs_2d(T, n, τn, Ds, h, m) -> NamedTuple
@@ -148,37 +142,68 @@ the two against each other, which is what keeps the duplication honest.
 end
 
 """
-    sigma_nu_2d(νx, νy, ντ, ux, uy, uτ, τ, θν, aνx, aνy,
-                dxνx, dxνy, dyνx, dyνy) -> (σxx, σxy, σyy, σeta)
+    sigma_nu_2d(uxv, uyv, uT, tau, nux, nuy,
+                dtnx, dxnx, dynx, dtny, dxny, dyny,
+                dtux, dxux, dyux, dtuy, dxuy, dyuy)
+        -> (σxx, σxy, σyy, σeta)
 
-The shear of the CURRENT, `σ_(ν)^{μν}`: the traceless transverse-projected
-symmetric gradient of ν, built exactly as `ns_shear_target_2d` builds `σ^{μν}`
-from u — with u → ν throughout, so the "acceleration" slot takes `a_ν^i = Dν^i`
-(a VECTOR, one component per transverse direction) and the expansion slot takes
-`θ_ν − a·ν`.
+`σ_(ν)^{ij}`, the transverse-projected traceless symmetric gradient of the
+current — GENERATED, not hand-written.
 
-⚠ `a_ν^i` is per-component. An earlier version of this file passed the SCALAR
-`a·ν` into both slots, which is dimensionally fine and physically wrong: it makes
-σ_(ν) blind to the direction of Dν and destroys x↔y covariance. Gate Gm2b (the
-rotation test) is what catches that class of error; the 1-D limit cannot, because
-it has one transverse direction.
+⚠ THIS IS NOT THE u-SHEAR WITH u → ν. The first version of this file assumed it
+was and gate Gm1 measured **65 %** on p_l. The projector `Δ^i_a Δ^j_b` acts on the
+FULL `∇^{(a}ν^{b)}`, whose τ-row involves `ν^τ = (u·ν_⊥)/u^τ` — a function of u.
+Projecting therefore drags in terms carrying gradients of **U**, not of ν, which
+no u → ν substitution can produce. The 1-D file shows the same structure in its
+own chart: its `(∇ν)_ll = D_lν^r/u^τ − u^rν(D_lu^r)/u^τ³` has exactly such a
+second term.
 
-The `−a·ν` in the trace is not cosmetic either: the identity
-`Σ_i (∇ν)_ii = θ_ν − a·ν` is what makes the trace removed here the same one the
-1-D file removes (its `Strν`).
+The expressions below are emitted by `Julia/tools/derive_signu_2p1d.wls`, which
+forms `Δ^i_a Δ^j_b sym^{ab} − (1/3)Δ^{ij}(θ_ν − a·ν)` symbolically in Cartesian
+Milne and gates (S1) that the full projection is what it prints, plus that
+`Dν^i` carries no Christoffel piece for a transverse index (S2) and that
+`θ_ν = ∂_τν^τ + ∂_iν^i + ν^τ/τ` (S3). 3/3.
+
+Arguments are the solver's own symbols: `uT` is u^τ, `dtnx` = ∂_τν^x, `dxux` =
+∂_xu^x, and so on. `σeta` is the MIXED component τ²σ_(ν)^{ηη}, matching how
+`pQeta` is stored.
 """
-@inline function sigma_nu_2d(νx::Float64, νy::Float64,
-                             ux::Float64, uy::Float64, uτ::Float64, τ::Float64,
-                             θν::Float64, aνdot::Float64,
-                             aνx::Float64, aνy::Float64,
-                             dxνx::Float64, dxνy::Float64,
-                             dyνx::Float64, dyνy::Float64)
-    third = (θν - aνdot) / 3
-    σxx = dxνx + ux*aνx - third*(1 + ux*ux)
-    σyy = dyνy + uy*aνy - third*(1 + uy*uy)
-    σxy = 0.5*(dxνy + dyνx) + 0.5*(ux*aνy + uy*aνx) - third*(ux*uy)
-    σeta = -third                      # ν^η = 0, so only the trace part survives
+@inline function sigma_nu_2d(uxv::Float64, uyv::Float64, uT::Float64, tau::Float64,
+                             nux::Float64, nuy::Float64,
+                             dtnx::Float64, dxnx::Float64, dynx::Float64,
+                             dtny::Float64, dxny::Float64, dyny::Float64,
+                             dtux::Float64, dxux::Float64, dyux::Float64,
+                             dtuy::Float64, dxuy::Float64, dyuy::Float64)
+    σxx = (tau*(1 + uxv^2 + uyv^2)*(2*dtnx*uxv^3 - dtny*uyv + 2*dxnx*uT - dyny*uT - uxv^2*(dtny*uyv - 2*dxnx*uT + dyny*uT) + uxv*(2*dtnx + 3*dtnx*uyv^2 + 3*dynx*uyv*uT)) + nuy*((-1 - dtux*tau*uxv - uxv^2 + 2*dtux*tau*uxv^3)*uyv^3 - 2*tau*uxv*(1 + uxv^2)^2*(dtuy*uxv + dxuy*uT) - tau*(-1 + 2*uxv^2)*uyv^2*(dtuy + dtuy*uxv^2 - dyux*uxv*uT) + (1 + uxv^2)*uyv*(-1 + 2*dtux*tau*uxv^3 + dyuy*tau*uT + uxv^2*(-1 + 2*dxux*tau*uT - 2*dyuy*tau*uT))) + nux*(uxv^5*(-1 + 2*dtuy*tau*uyv) + tau*uyv*(1 + uyv^2)*(dtux*uyv + dyux*uT) + 2*tau*uxv^4*(-dtux - dtux*uyv^2 + dxuy*uyv*uT) - 2*tau*uxv^2*(dtux + 2*dtux*uyv^2 + dtux*uyv^4 + (-dxuy + dyux)*uyv*uT + dyux*uyv^3*uT) - uxv*(1 + dtuy*tau*uyv^3 + 2*dxux*tau*uT + uyv^2*(1 + 2*dxux*tau*uT + dyuy*tau*uT)) + uxv^3*(2*dtuy*tau*uyv + 2*dtuy*tau*uyv^3 - 2*(1 + dxux*tau*uT) + uyv^2*(-1 - 2*dxux*tau*uT + 2*dyuy*tau*uT))))/(3*tau*(1 + uxv^2 + uyv^2)^(3/2))
+    σxy = (tau*(1 + uxv^2 + uyv^2)*(3*dtny*uxv^3 + 3*dynx*(1 + uyv^2)*uT + 3*(dtnx*uyv*(1 + uyv^2) + dxny*uT) + uxv^2*(dtnx*uyv + 3*dxny*uT) + uxv*(3*dtny + dtny*uyv^2 + (dxnx + dyny)*uyv*uT)) - nuy*(4*dtuy*tau*uxv^5*uyv + 3*dxuy*tau*uyv*uT + 4*tau*uxv^4*uyv*(-(dtux*uyv) + dxuy*uT) - tau*uxv^2*uyv*(-7*dxuy*uT + 2*dtux*uyv*(3 + 2*uyv^2) + dyux*uT*(3 + 4*uyv^2)) + uxv^3*(10*dtuy*tau*uyv + 4*dtuy*tau*uyv^3 + 3*dyuy*tau*uT + uyv^2*(2 - 4*dxux*tau*uT + 4*dyuy*tau*uT)) + uxv*(6*dtuy*tau*uyv + 4*dtuy*tau*uyv^3 + 2*uyv^4 + 3*dyuy*tau*uT + uyv^2*(2 - 3*dxux*tau*uT + 4*dyuy*tau*uT))) + nux*(2*uxv^4*uyv*(-1 + 2*dtuy*tau*uyv) - 3*dxux*tau*uyv*(1 + uyv^2)*uT - 4*tau*uxv^3*uyv*(dtux + dtux*uyv^2 - dxuy*uyv*uT) + uxv^2*uyv*(-2 + 6*dtuy*tau*uyv + 4*dtuy*tau*uyv^3 - 4*dxux*tau*uT + 3*dyuy*tau*uT + uyv^2*(-2 - 4*dxux*tau*uT + 4*dyuy*tau*uT)) - tau*uxv*(dyux*uT*(3 + 7*uyv^2 + 4*uyv^4) + uyv*(6*dtux + 10*dtux*uyv^2 + 4*dtux*uyv^4 - 3*dxuy*uyv*uT))))/(6*tau*(1 + uxv^2 + uyv^2)^(3/2))
+    σyy = (tau*(1 + uxv^2 + uyv^2)*(-(dtnx*uxv) + 2*dtny*uyv + 3*dtny*uxv^2*uyv - dtnx*uxv*uyv^2 + 2*dtny*uyv^3 + 3*dxny*uxv*uyv*uT - dxnx*(1 + uyv^2)*uT + 2*dyny*(1 + uyv^2)*uT) + nux*(uxv^3*(-1 - dtuy*tau*uyv - uyv^2 + 2*dtuy*tau*uyv^3) - 2*tau*uyv*(1 + uyv^2)^2*(dtux*uyv + dyux*uT) - tau*uxv^2*(-1 + 2*uyv^2)*(dtux + dtux*uyv^2 - dxuy*uyv*uT) + uxv*(1 + uyv^2)*(-1 + 2*dtuy*tau*uyv^3 + dxux*tau*uT + uyv^2*(-1 - 2*dxux*tau*uT + 2*dyuy*tau*uT))) + nuy*((-1 + 2*dtux*tau*uxv)*uyv^5 + tau*uxv*(1 + uxv^2)*(dtuy*uxv + dxuy*uT) + 2*tau*uyv^4*(-dtuy - dtuy*uxv^2 + dyux*uxv*uT) - 2*tau*uyv^2*(dtuy + 2*dtuy*uxv^2 + dtuy*uxv^4 + (dxuy - dyux)*uxv*uT + dxuy*uxv^3*uT) + uyv^3*(2*dtux*tau*uxv + 2*dtux*tau*uxv^3 + uxv^2*(-1 + 2*dxux*tau*uT - 2*dyuy*tau*uT) - 2*(1 + dyuy*tau*uT)) - uyv*(1 + dtux*tau*uxv^3 + 2*dyuy*tau*uT + uxv^2*(1 + dxux*tau*uT + 2*dyuy*tau*uT))))/(3*tau*(1 + uxv^2 + uyv^2)^(3/2))
+    σeta = (-dxnx - dyny + ((dtux*uxv + dtuy*uyv)*(nux*uxv + nuy*uyv))/(1 + uxv^2 + uyv^2)^(3/2) - (dtux*nux + dtuy*nuy + dtnx*uxv + dtny*uyv)/uT + (2*(nux*uxv + nuy*uyv))/(tau*uT) + nux*(dxux*uxv + dyux*uyv + dtux*uT) + nuy*(dxuy*uxv + dyuy*uyv + dtuy*uT) - ((nux*uxv + nuy*uyv)*(dxux*uxv^2 + uxv*((dxuy + dyux)*uyv + dtux*uT) + uyv*(dyuy*uyv + dtuy*uT)))/(1 + uxv^2 + uyv^2))/3
     return (σxx, σxy, σyy, σeta)
+end
+
+"""
+    rank1_traceless_2d(Ax, Ay, Bx, By, ux, uy, uτ) -> (qxx, qxy, qyy)
+
+Symmetric, traceless, transverse part of `A^{(i}B^{j)}` for two u-orthogonal
+transverse vectors — i.e. `A^{⟨i}B^{j⟩}`.
+
+Both vectors' τ-components follow from u-orthogonality, so lowering an index to
+take the trace brings them in: the Δ-trace is
+
+    tr = [A^xB^x(1+u_y²) + A^yB^y(1+u_x²) − (A^xB^y + A^yB^x)u_xu_y] / (u^τ)²
+
+and NOT `A^xB^x + A^yB^y`. Generated symbolically; the hand-written version was
+wrong by 2.69x in the φ channel.
+"""
+@inline function rank1_traceless_2d(Ax::Float64, Ay::Float64,
+                                    Bx::Float64, By::Float64,
+                                    ux::Float64, uy::Float64, uτ::Float64)
+    u2 = uτ*uτ
+    tr = (Ay*(By + By*ux^2 - Bx*ux*uy) + Ax*(Bx - By*ux*uy + Bx*uy^2)) / u2
+    qxx = Ax*Bx - (1 + ux^2)*tr/3
+    qyy = Ay*By - (1 + uy^2)*tr/3
+    qxy = (Ay*Bx + Ax*By)/2 - (ux*uy)*tr/3
+    return (qxx, qxy, qyy)
 end
 
 """
@@ -199,9 +224,11 @@ gate can hand both codes identical data.
                                          peta::Float64, PiQ::Float64,
                                          dtα::Float64, dxα::Float64, dyα::Float64,
                                          θν::Float64, aνx::Float64, aνy::Float64,
+                                         dtνx::Float64, dtνy::Float64,
                                          dxνx::Float64, dxνy::Float64,
                                          dyνx::Float64, dyνy::Float64,
                                          θ::Float64, ax::Float64, ay::Float64,
+                                         dtux::Float64, dtuy::Float64,
                                          dxux::Float64, dxuy::Float64,
                                          dyux::Float64, dyuy::Float64,
                                          n::Float64, τn::Float64, Ds::Float64,
@@ -220,10 +247,16 @@ gate can hand both codes identical data.
     σxx, σxy, σyy, σeta = ns_shear_target_2d(ux, uy, uτ, τ, θ, ax, ay,
                                              dxux, dxuy, dyux, dyuy, -0.5)
 
-    # ── the current's shear ───────────────────────────────────────────────────
-    aνdot = ax*νx + ay*νy                      # a·ν (ν^η = 0, transverse metric)
-    sνxx, sνxy, sνyy, _ = sigma_nu_2d(νx, νy, ux, uy, uτ, τ, θν, aνdot,
-                                      aνx, aνy, dxνx, dxνy, dyνx, dyνy)
+    # ── the current's shear (generated; see sigma_nu_2d) ─────────────────────
+    # a·ν = a_μ ν^μ. ⚠ NOT `ax νx + ay νy`: both vectors are u-orthogonal, so
+    # lowering the index brings in their τ-components and the contraction picks up
+    # −(a·u)(ν·u)/(u^τ)². Derived symbolically alongside π:σ and the (iii)
+    # coupling — the same lowering error, in the term that dominates the trace
+    # channel's ν dependence.
+    aνdot = ax*νx + ay*νy - ((ax*ux + ay*uy)*(νx*ux + νy*uy))/(uτ*uτ)
+    sνxx, sνxy, sνyy, _ = sigma_nu_2d(ux, uy, uτ, τ, νx, νy,
+                                      dtνx, dxνx, dyνx, dtνy, dxνy, dyνy,
+                                      dtux, dxux, dyux, dtuy, dxuy, dyuy)
 
     # ── scalars shared by both sectors ────────────────────────────────────────
     DT   = uτ*dtT + ux*dxT + uy*dyT
@@ -232,42 +265,55 @@ gate can hand both codes identical data.
     Dα   = uτ*dtα + ux*dxα + uy*dyα
     geo  = τM * ((5.0/3.0)*θ + DlnC)
 
-    # π:σ — the FULL contraction, η channel included. That channel is where the
-    # 1-D p_η lives; dropping it silently loses a third of the coupling.
-    πσ = pxx*σxx + 2*pxy*σxy + pyy*σyy + peta*σeta
+    # π:σ = π_{μν}σ^{μν}, with BOTH indices lowered by the metric.
+    # ⚠ NOT `pxx σxx + 2 pxy σxy + pyy σyy + peta σeta`. The stored components are
+    # CONTRAVARIANT, so lowering drags in the τ-rows (themselves determined by
+    # orthogonality) and the contraction acquires u-dependent weights. The naive
+    # form is wrong by O(u²) — it is what left Π_Q 3-5 % off in gate Gm1 after
+    # every other term was exact. Generated symbolically from π_{μν}σ^{μν} with
+    # the τ-row derived; it reduces to the 1-D `p_l s_l + p_φ s_φ + p_η s_η` in
+    # the axisymmetric limit, which Gm1 checks.
+    πσ = (2*pxy*σxy + pyy*σyy + 2*pxy*σxy*ux^2 + 2*pyy*σyy*ux^2 + pyy*σyy*ux^4 - 2*pxy*σxx*ux*uy - 2*pyy*σxy*ux*uy - 2*pxy*σyy*ux*uy - 2*pyy*σxy*ux^3*uy - 2*pxy*σyy*ux^3*uy + 2*pxy*σxy*uy^2 + pyy*σxx*ux^2*uy^2 + 4*pxy*σxy*ux^2*uy^2 - 2*pxy*σxx*ux*uy^3 + pxx*σxx*(1 + uy^2)^2 + peta*σeta*(1 + ux^2 + uy^2)^2 + pxx*ux*uy*(σyy*ux*uy - 2*σxy*(1 + uy^2)))/(1 + ux^2 + uy^2)^2
 
-    # ── the (iii) coupling π_Q^{⟨μ}_λ σ^{ν⟩λ} on the transverse block ────────
-    # Raised-index contraction over the transverse directions; the τ and η rows
-    # contribute nothing to the transverse block (π^{iη} = σ^{iη} = 0, and the
-    # τ-row is not independent). Symmetrised, with its trace removed below.
-    c_xx = pxx*σxx + pxy*σxy
-    c_yy = pxy*σxy + pyy*σyy
-    c_xy = 0.5*((pxx*σxy + pxy*σyy) + (pxy*σxx + pyy*σxy))
+    # ── the (iii) coupling π_Q^{(i}_λ σ^{j)λ}, symmetrised ───────────────────
+    # ⚠ The index on π must be LOWERED by the metric before contracting, and the
+    # τ-row then contributes: the correction is −(π·u)^i(σ·u)^j/(u^τ)², which the
+    # naive transverse-only product omits. Same class of error as π:σ above.
+    # Generated symbolically alongside it.
+    c_xx = pxx*σxx + pxy*σxy - ((pxx*ux + pxy*uy)*(σxx*ux + σxy*uy))/(1 + ux^2 + uy^2)
+    c_yy = pxy*σxy + pyy*σyy - ((pxy*ux + pyy*uy)*(σxy*ux + σyy*uy))/(1 + ux^2 + uy^2)
+    c_xy = (pyy*(σxy + σxy*ux^2 - σxx*ux*uy) + pxy*(σxx + σyy + σyy*ux^2 - 2*σxy*ux*uy + σxx*uy^2) + pxx*(σxy - σyy*ux*uy + σxy*uy^2))/(2*(1 + ux^2 + uy^2))
 
-    # ── class (iv): the rank-1 ν⊗a and ν⊗∇(Th) structures, symmetrised ───────
+    # ── class (iv): the rank-1 ν⊗a and ν⊗∇(Th) structures ────────────────────
+    # 2 λ_a a^{⟨i}ν^{j⟩} + (D_s/T) ν^{⟨i}∇^{j⟩}(Th): the symmetric TRACELESS
+    # TRANSVERSE part of each rank-1 product, built by `rank1_traceless_2d`, which
+    # lowers with the metric and removes the Δ-trace over all THREE directions.
+    # ⚠ Doing this by hand — symmetrising as 2A^iB^i on the diagonal and averaging
+    # the trace over the two transverse directions — was wrong by 2.69x in the φ
+    # channel (measured by gate Gm1).
     gTx = (h + Tm*hp) * (dxT + ux*DT)          # ∇^{⟨x⟩}(Th)
     gTy = (h + Tm*hp) * (dyT + uy*DT)
-    q_xx = 2*cf.λa*(2*ax*νx)      + (Ds/Tm)*(2*νx*gTx)
-    q_yy = 2*cf.λa*(2*ay*νy)      + (Ds/Tm)*(2*νy*gTy)
-    q_xy = 2*cf.λa*(ax*νy + ay*νx) + (Ds/Tm)*(νx*gTy + νy*gTx)
-    # its transverse trace, removed so the block stays traceless
-    q_tr = (q_xx*(1) + q_yy*(1)) / 3
+    qa_xx, qa_xy, qa_yy = rank1_traceless_2d(ax, ay, νx, νy, ux, uy, uτ)
+    qg_xx, qg_xy, qg_yy = rank1_traceless_2d(νx, νy, gTx, gTy, ux, uy, uτ)
+    q_xx = 2*cf.λa*qa_xx + (Ds/Tm)*qg_xx
+    q_yy = 2*cf.λa*qa_yy + (Ds/Tm)*qg_yy
+    q_xy = 2*cf.λa*qa_xy + (Ds/Tm)*qg_xy
 
     # ── the traceless LHS sources ────────────────────────────────────────────
     sxx = pxx + 2*ηQ*sνxx + geo*pxx +
-          2*τM*(c_xx - πσ/3) + 2*τM*PiQ*σxx +
-          2*cf.ηbar*σxx + (q_xx - q_tr)/2
+          2*τM*(c_xx - (1 + ux*ux)*πσ/3) + 2*τM*PiQ*σxx +
+          2*cf.ηbar*σxx + q_xx
     syy = pyy + 2*ηQ*sνyy + geo*pyy +
-          2*τM*(c_yy - πσ/3) + 2*τM*PiQ*σyy +
-          2*cf.ηbar*σyy + (q_yy - q_tr)/2
+          2*τM*(c_yy - (1 + uy*uy)*πσ/3) + 2*τM*PiQ*σyy +
+          2*cf.ηbar*σyy + q_yy
     sxy = pxy + 2*ηQ*sνxy + geo*pxy +
-          2*τM*c_xy + 2*τM*PiQ*σxy +
-          2*cf.ηbar*σxy + q_xy/2
+          2*τM*(c_xy - (ux*uy)*πσ/3) + 2*τM*PiQ*σxy +
+          2*cf.ηbar*σxy + q_xy
 
     # ── the trace channel (a scalar: same form as 1-D) ───────────────────────
     sB = PiQ + ζQ*θν + geo*PiQ + (2.0/3.0)*τM*πσ +
          cf.ηbar*(cf.ABr*DlnT + (5.0/3.0)*θ) +
-         (Ds*cf.Aco/(3*Tm))*aνdot + (5.0/6.0)*(Ds/Tm)*(νx*gTx + νy*gTy) +
+         (Ds*cf.Aco/(3*Tm))*aνdot + (5.0/6.0)*(Ds/Tm)*(νx*gTx + νy*gTy - ((νx*ux + νy*uy)*(gTx*ux + gTy*uy))/(uτ*uτ)) +
          cf.ηbar*Dα
 
     # ── solve τ_M u^τ ∂_τ X + src = 0 ─────────────────────────────────────────
