@@ -27,6 +27,7 @@ include(joinpath(_SRC, "eos.jl"))
 include(joinpath(_SRC, "io.jl"))
 include(joinpath(_SRC, "is2_second_moment_builder.jl"))
 include(joinpath(_SRC, "hq_consistent_firstmoment.jl"))
+include(joinpath(_SRC, "hq_consistent_m2.jl"))
 include(joinpath(_SRC, "logging_setup.jl"))
 
 const TWO_PI = 2π
@@ -354,6 +355,18 @@ const HQ_KAPPA_RESONANCE_FACTOR = parse(Float64, get(ENV, "FIVO_KAPPA_RESONANCE_
 # :HQ_const_BG_consistent_5f matrix (charm_hydro_consistent), not this module.
 const IS2_CONSISTENT_FM = Ref(get(ENV, "FIVO_IS2_CONSISTENT",
                                   get(ENV, "FIVO_HQ_CONSISTENT", "0")) == "1")
+# ── THE CONSISTENT SECOND MOMENT (2026-09-08), src/hq_consistent_m2.jl ────────────────────────────
+# INDEPENDENT of IS2_CONSISTENT_FM on purpose: the first and second moments switch separately, which
+# is what makes a four-way attribution (shipped/consistent × moment) possible. Default OFF = the
+# shipped `_second_moment_eigen_rhs!` rows, byte-identical to every number produced before this file.
+#
+# ⚠ The shipped rows are NOT the ∇ν-only limit of the consistent system: their σ_(ν) drive carries the
+# OPPOSITE SIGN (measured, exactly −1× — Tex/MaxEntHydro/diag_fivo_m2_gates.jl gate M3 reports
+# |ratio−1| = 2.0000 at all 24 points) and they carry coordinate-transport couplings among
+# (π_r, π_perp, Π_Q) that Δ-projected Dπ does not have. So this is a REPLACEMENT of rows 3-5, not an
+# addition to them. Gate M4: the replacement reproduces Fluidum's `hqc_m2_rows(:consistent)` to
+# 1.7e-15 over 24 points × 3 rows.
+const IS2_CONSISTENT_M2 = Ref(get(ENV, "FIVO_IS2_CONSISTENT_M2", "0") == "1")
 # ── Consistent 5-field (2026-08-25): with IS2_CONSISTENT_FM AND use_cM, the c_M back-coupling is
 # applied as an EXPLICIT SOURCE built from the complete abstract-route row (hq_cm_force — includes
 # the hoop-stress and τ-redshift geometric pieces the legacy basis-route matrix entries miss), and
@@ -1196,6 +1209,22 @@ function _second_moment_eigen_rhs!(
         d3 = -v*drR + SrcR
         d4 = -v*drP + SrcP
         d5 = -v*drB + SrcB
+
+        # ── THE CONSISTENT SECOND MOMENT (src/hq_consistent_m2.jl) ────────────────────────────────
+        # A REPLACEMENT of the three rows above, not an addition: the shipped system carries the
+        # σ_(ν) drive with the opposite sign and coordinate-transport couplings the covariant
+        # reduction does not have (gate M3), so the two cannot be superposed.
+        # ∂_rα is central here for the same reason drnur is: it feeds a source, not a flux, and the
+        # upwind bias that the advection terms need would put a one-sided error into a symmetric term.
+        if IS2_CONSISTENT_M2[]
+            dralpha = (α[i+1] - α[i-1]) / (grid.r[i+1] - grid.r[i-1])
+            h_m2, hp_m2 = hq_consistent_h_hp(T, DsT_val, tp.τn, eos)
+            d3, d4, d5 = hq_consistent_m2_rhs(
+                τ, r, ur, T, dtT, drT, drur, dtur,
+                piR, piP, bPi, nur,
+                dU[1][i], dralpha, dtnur, drnur, (drR, drP, drB),
+                n_local, tp.τn, tp.Ds, h_m2, hp_m2, tauM, etaM, hq_mass(eos))
+        end
         # vacuum ramp (same as the first-moment fields)
         w = _vacuum_weight(n_local, T)
         dU[3][i] = d3*w; dU[4][i] = d4*w; dU[5][i] = d5*w
