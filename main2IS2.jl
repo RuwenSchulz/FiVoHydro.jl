@@ -421,7 +421,23 @@ function load_IS2_background(path::AbstractString)
             f[_k("T_spline")],
             haskey(f, "ur_spline") || haskey(f, "ur_spline1") ? f[_k("ur_spline")] : nothing,
             haskey(f, "v_spline") || haskey(f, "v_spline1") ? f[_k("v_spline")] : nothing,
-            haskey(f, "α_spline") || haskey(f, "α_spline1") ? f[_k("α_spline")] : nothing,
+            # ⚠ WARN, do not silently default. `bg_alpha` returns 0.0 when this is
+            # nothing, and alpha = 0 against a background whose real alpha is ~-1.75
+            # is a factor exp(1.755) = 5.8 in n -- which a comparison harness read as
+            # a physics finding on 2026-09-08 before it was traced here. Some files
+            # (background_physical.jld2) store the ASCII key "alpha_spline"; accept it.
+            let has_u = haskey(f, "α_spline") || haskey(f, "α_spline1"),
+                has_a = haskey(f, "alpha_spline") || haskey(f, "alpha_spline1")
+                if has_u
+                    f[_k("α_spline")]
+                elseif has_a
+                    @warn "load_IS2_background: using ASCII \"alpha_spline\"; the Unicode \"α_spline\" is the usual key" path
+                    f[_k("alpha_spline")]
+                else
+                    @warn "load_IS2_background: NO fugacity spline in the background — α will default to 0, which is almost never what you want (init_mode=:background then starts from α ≡ 0)" path
+                    nothing
+                end
+            end,
             haskey(f, "n_spline") || haskey(f, "n_spline1") ? f[_k("n_spline")] : nothing,
             haskey(f, "nur_spline") || haskey(f, "nur_spline1") ? f[_k("nur_spline")] : nothing,
             haskey(f, "kappa_spline") || haskey(f, "kappa_spline1") ? f[_k("kappa_spline")] : nothing,
