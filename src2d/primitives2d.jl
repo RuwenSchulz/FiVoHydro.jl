@@ -93,6 +93,17 @@ Base.@kwdef struct IdealDiffVisc2DModel{EOS,PR,SH,BU}
     # goes degenerate. Off reproduces the pre-D9 behaviour exactly, for A/B.
     vacuum_ramp_relax::Bool     = true
 
+    # THE THERMODYNAMICALLY CONSISTENT FIRST MOMENT (2026-09-08).
+    # false = the shipped ∇α-only drive ν_NS = -κ∇^{⟨i⟩}α, byte-identical to every
+    # 2-D number produced before src2d/hq_consistent_firstmoment2d.jl existed.
+    # true  = add the five source terms of the full-∇P first moment (pressure
+    #         gradient, inertial, ν·∇u, expansion + D ln h, geometric dilution).
+    # The 1-D counterpart is `hydro_current_IS2.IS2_CONSISTENT_FM`, which is O+O's
+    # PRODUCTION closure (OO_CLOSURE=consistent). Sources only: the fluxes, the
+    # CFL machinery and every other sector are untouched by this switch.
+    # Gate: test_consistent_fm2d.jl (1-D limit to round-off, and Bjorken).
+    consistent_fm::Bool         = false
+
     # ---- shear ----
     enable_shear::Bool          = false
     shear::SH                   = ZeroViscosity()
@@ -202,6 +213,21 @@ function reject_unwired_knobs_2d(m::IdealDiffVisc2DModel)
               "exists for parity with the 1-D model, which honours it, but nothing in src2d/ reads it. " *
               "Setting it here would silently run different physics than the same setting in 1-D. " *
               "Use the default ($def), or wire the term into dissipation2d.jl and gate it first.")
+    end
+
+    # `tauN_coeff` is a legitimate dial on its own, but it is INCOMPATIBLE with the
+    # consistent first moment. That closure needs the tie τ_n = D_s h/T, and it gets
+    # h from the closed form m K₃/K₂ (hq_h_hprime_2d). `tauN_coeff` multiplies τ_n in
+    # diff_coeffs_2d and does NOT multiply that h, so with both set the relaxation
+    # time and the enthalpy inside its own sources are on different clocks — a
+    # silent inconsistency confined to the sources. Refuse it, in the same style as
+    # the unwired knobs above, rather than let it run.
+    if m.consistent_fm && m.tauN_coeff != 1.0
+        error("IdealDiffVisc2DModel: `tauN_coeff = $(m.tauN_coeff)` cannot be combined with " *
+              "`consistent_fm = true`. The consistent first moment relies on τ_n = D_s·h/T with " *
+              "h = m·K₃/K₂ taken in closed form; `tauN_coeff` rescales τ_n but not h, so the tie " *
+              "breaks and the sources silently use a different enthalpy than the relaxation time. " *
+              "Use `tauN_coeff = 1.0` with the consistent closure, or turn the closure off.")
     end
     return nothing
 end

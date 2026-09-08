@@ -23,8 +23,8 @@ This repository holds **two independent solvers** that share a package but almos
 | driver / module | `main.jl` → `hydro` | `main2D.jl` → `hydro2d` |
 | numerics | `src/` (28 files, ~7.8 k lines) | `src2d/` (14 files, ~3.3 k lines) |
 | geometry | radial Milne `(τ, r)`, axisymmetric | transverse Cartesian Milne `(τ, x, y)`, boost-invariant |
-| charm / IS2 sector | yes (`main2IS2.jl` and the other `main2*.jl`) | **no** |
-| tests | `test/runtests.jl` (`Pkg.test()`, in CI) | `test/run2d_gates.jl` (18 gates; only the ~10 s fast tier is in CI — see below) |
+| charm / IS2 sector | yes (`main2IS2.jl` and the other `main2*.jl`) | first moment only — a `(n, ν^x, ν^y)` charge sector with the consistent closure available (`consistent_fm`); **no second-moment sector** |
+| tests | `test/runtests.jl` (`Pkg.test()`, in CI) | `test/run2d_gates.jl` (19 gates; only the ~13 s fast tier is in CI — see below) |
 
 `main2D.jl` includes exactly **five** files from `src/` — `constants.jl`, `utils.jl`, `eos.jl`,
 `primitives.jl` (transport-coefficient models only) and `relaxation_laws.jl`. Everything that knows
@@ -62,7 +62,7 @@ not a reference manual — sections are in the order they were written, includin
 | `mainDensityFrame.jl` | — | thin driver: `charge_mode=:density_frame` (ν-less parabolic flux) then `hydro.main()` | DensityFrame project |
 | `mainJonly.jl`, `mainJonly2nd.jl` | — | charge-only variants used by AttractorPaper5 / `Julia/tools/diag_piQ_*` | legacy |
 | `mainBGonly.jl` | `hydro_bgonly` | background-only copy of `main.jl` (≈900 duplicated lines) — kept: it is MainFiVo's `:background_only` pipeline mode (`Code/case_specs.jl:81`) | MainFiVo |
-| **`main2D.jl`** | **`hydro2d`** | **the 2+1D solver** (transverse Cartesian, boost-invariant Milne): bulk + charge `(T, u^x, u^y, Π, π^{xx}, π^{xy}, π^{yy}, π^{ηη}, n, ν^x, ν^y)` via `run_sim_2d!`. Includes all of `src2d/`. **No charm/IS2 sector.** | `tools/export_background2d.jl`; the 18-gate ladder `test/run2d_gates.jl` |
+| **`main2D.jl`** | **`hydro2d`** | **the 2+1D solver** (transverse Cartesian, boost-invariant Milne): bulk + charge `(T, u^x, u^y, Π, π^{xx}, π^{xy}, π^{yy}, π^{ηη}, n, ν^x, ν^y)` via `run_sim_2d!`. Includes all of `src2d/`. Charge sector carries the consistent first moment (`consistent_fm`); no second-moment/IS2 sector. | `tools/export_background2d.jl`; the 19-gate ladder `test/run2d_gates.jl` |
 | `src/FiVoHydro.jl` | `FiVoHydro` | package wrapper: includes `main.jl`, exports `hydro` (only `Projects/SoftPionPaper` uses `import FiVoHydro`) | — |
 
 `src/` (28 files, incl. the `FiVoHydro.jl` package shim) is the bulk solver: `eos.jl` (ConformalHQEOS, LatticeHRGEOS, TabulatedHQEOS),
@@ -122,22 +122,22 @@ julia Julia/FiVoHydro.jl/tools/list_env_flags.jl > Julia/FiVoHydro.jl/ENV_FLAGS.
 
 ```sh
 julia --project=Julia/FiVoHydro.jl -e 'using Pkg; Pkg.test()'                    # 1-D, ~1 min, IN CI
-julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run2d_gates.jl  # 2-D, 18 gates, NOT in CI
+julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run2d_gates.jl  # 2-D, 19 gates, full ladder
 ```
 
 `test/run2d_gates.jl` is the whole 2+1D validation ladder — shear-closure algebra, primitive recovery
-(and recovery vs 1-D on the production locus), G0/G0b Bjorken, G1/G1v Gubser ideal and viscous, Gs
+(and recovery vs 1-D on the production locus), Gc the consistent first moment, G0/G0b Bjorken, G1/G1v Gubser ideal and viscous, Gs
 sound, G2 shear+bulk, G3/G3g charge, Gk charge dispersion, G4 reproduction vs 1-D production,
 G5 all-sectors production IC, G6 non-axisymmetric, G7 dissipative vs 1-D, G8 un-averaged and G9
 fluctuating ICs. Each gate runs in its own subprocess (several include both `main.jl`-side files and
 `main2D.jl`, whose modules would collide in one session) and the script exits 1 if any fails, so it
 is already usable as a CI step.
 
-Last full run: **18/18 PASS, ≈70 min** (2026-09-08). The full ladder is too slow to put in CI as it
-stands — ~70 min against ~1 min for `Pkg.test()` — so CI runs only `FIVO2D_TIER=fast`: the three
-algebra and primitive-recovery gates, **~10 s**, no time evolution. Treat that as a smoke test; it
+Last full run: **19/19 PASS, ≈70 min** (2026-09-08). The full ladder is too slow to put in CI as it
+stands — ~70 min against ~1 min for `Pkg.test()` — so CI runs only `FIVO2D_TIER=fast`: the four
+algebra, recovery and consistent-first-moment gates, **~13 s**, no time evolution. Treat that as a smoke test; it
 cannot see the timestepper, the fluxes or the regulators. **Run the full ladder by hand after
-touching `src2d/` or `main2D.jl`.** (Per-gate cost: the three fast gates are 2.4 / 5.2 / 3.5 s, then
+touching `src2d/` or `main2D.jl`.** (Per-gate cost: the four fast gates are 2.4 / 5.2 / 3.5 / 5.2 s, then
 G0 Bjorken alone is 70 s — that cliff is where the fast tier stops. Splitting the remainder behind a
 schedule or a label is the obvious next step and has not been done.) What each gate is for and what
 it measured: `TWOD_PROGRAM.md` §6.
@@ -231,9 +231,16 @@ Scope, and what is *not* corrected:
 - Not every product has a consistent twin, and the exceptions are named rather than silently falling
   back: the `c_M` variant bundle, the analytic τ₀ second-moment IC (closure-independent by
   construction), and `case == "ideal"` (at `D_sT → 0` there is no current for a drive to act on).
-- **The 2-D solver has no consistent first moment**, and no charm sector at all — `main2D.jl` does
-  not include `is2_second_moment_builder.jl` or `hq_consistent_firstmoment.jl`. This is a gap in
-  `hydro2d`, not on the O+O production path.
+- **The 2-D solver now has its own consistent first moment** —
+  `src2d/hq_consistent_firstmoment2d.jl`, flag `IdealDiffVisc2DModel.consistent_fm`, default OFF
+  (2026-09-08). It is a RE-DERIVATION, not a port: the 1-D function is the same covariant object
+  contracted in radial Milne, and retyping it with `x` for `r` is wrong in two specific ways that
+  gate `test_consistent_fm2d.jl` exists to catch (both were made, and caught — see
+  `TWOD_PROGRAM.md` §6ae). In its 1-D limit it reproduces `hq_consistent_extras` bit for bit.
+  What 2-D still does not have is the SECOND-moment sector: no `π_Q`, no `Π_Q`, hence no `c_M`
+  back-coupling and no `is2_second_moment_builder.jl`. The consistent projection corrects the first
+  moment only, so nothing is missing from the closure itself — and in O+O production the
+  back-coupling is off in any case.
 
 Gates: `Tex/MaxEntHydro/diag_fivo_consistent_gates.jl` (24 xAct reference points shared with the
 Fluidum gates, the `h == m K₃/K₂` tie, the identity `n + T dn/dT == n h/T`, and a cross-code

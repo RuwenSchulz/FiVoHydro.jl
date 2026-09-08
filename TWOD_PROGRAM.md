@@ -2802,3 +2802,63 @@ fixed the same day; `Julia/Fluidum.jl/src/Matrix/2d_viscous.jl` header,
 and it does not touch the 2+1D comparison's conclusions either — an axisymmetric or
 rest-initialised elliptic flow is irrotational, which is exactly the configuration where the two
 forms agree — but it is the reason to re-run any Fluidum-side comparison with `FLUIDUM_2D_DERIVED=1`.
+
+## 6ae. The thermodynamically consistent first moment in 2+1D (Gc)
+
+`src2d/hq_consistent_firstmoment2d.jl`, flag `IdealDiffVisc2DModel.consistent_fm`, default OFF.
+Gate `test_consistent_fm2d.jl`, in the fast tier of the ladder (so CI runs it).
+
+**What it closes.** The 2-D charge sector had one drive, `ν_NS^i = -κ∇^{⟨i⟩}α`. That is the
+homogeneous-rest-frame reduction of `(D_s/T)Δ^i_λ∇_μT_Q^{μλ} + ν^i = 0`; removing the homogeneity
+step adds the pressure-gradient ∇⊥T channel, the inertial `τ_n n a^i`, `τ_n ν^j∇_ju^i`, and the
+expansion + `D ln h` terms. In 1-D this closure is O+O's PRODUCTION row (`OO_CLOSURE=consistent`,
+via `hydro_current_IS2.IS2_CONSISTENT_FM`); 2-D had no equivalent at all. The c_M back-coupling has
+no 2-D counterpart and needs none — there is no second-moment sector here, and the consistent
+projection corrects the first moment only.
+
+**It is a re-derivation, not a port, and the two attempts that failed say why.** The 1-D
+`hq_consistent_extras` is the same covariant object contracted in radial Milne, where distinct
+terms collapse onto one another. Gate Gc1 (the u^y = 0, ∂_y = 0 limit against the 1-D function)
+caught both errors; nothing else would have, because both produce a smooth, plausible source.
+
+  * **The geometric terms enter ONCE, inside θ.** The wls names "expansion" and "geometric
+    dilution" separately, and the first version read that as two additive contributions. The
+    ν-proportional coefficient is exactly `τ_n θ + (D_s/T)h′DT` with θ the FULL divergence, which
+    already carries `u^τ/τ` (+ `u^r/r` radially — in Cartesian coordinates that piece is part of
+    `∂_ju^j`, the same `σ^{yy} ↔ σ^φ_φ` correspondence dissipation2d.jl records for the shear).
+    Double-counting it is **2.5–25 %**, worst where `u^τ/τ` dominates the other gradients.
+  * **The Δ^i_λ in front of `ν^m∇_mu^λ` is the IDENTITY, and "applying" it is an error.** With
+    `V^λ = ν^m∇_mu^λ`, `u_λV^λ = ½ν^m∇_m(u·u) = 0` identically, so `Δ^i_λV^λ = V^i`. The second
+    version subtracted `u^i V^τ` instead of `u^i` times that vanishing bracket — **0.4–1.6 %**.
+
+With both fixed, Gc1 is **bit-identical** to the 1-D reference at all five test states (worst
+2.5e-16, including `r = 0.05`, `u^r = -1.3`). Gc2 checks rotational invariance of the source vector
+(3.2e-16) — the 1-D limit has one transverse direction and is blind to an x/y transposition. Gc3 is
+the Bjorken limit, Gc4 the zero state, Gc5 that the flag is inert when off and NOT inert when on.
+
+**Size of the effect.** N = 120, `x,y ≤ 10` fm, `D_sT = 0.1163`, elliptic hot spot
+(`1 + 0.6exp(-(x²/9 + y²/16))`), τ = 0.4 → 3.0, diffusion only:
+
+| | max\|ν\| | Σ\|ν\| |
+|---|---|---|
+| shipped (∇α only) | 2.380e-5 | 8.586e-2 |
+| consistent | 3.531e-5 | 1.241e-1 |
+| ratio | **1.483** | **1.446** |
+
+so the consistent closure raises the diffusion current by ~45–48 % on a realistic transverse
+gradient, and `max|Δν|` is 48.6 % of `max|ν|`. Conserved charge is untouched (`Στ J^τ` agrees to
+3.1e-6): these are SOURCES on the current, not on the charge, which is the expected shape and a
+useful check that nothing leaked into the conservative update.
+
+**A knob that had to be refused.** `tauN_coeff` multiplies τ_n in `diff_coeffs_2d` but not the `h`
+this file takes in closed form, so with both set the row's relaxation time and the enthalpy inside
+its own sources sit on different clocks — silently, and only in the sources. The 1-D
+`hq_consistent_h_hp` survives a rescale precisely because it DEFINES `h = τ_n T/D_s` from the τ_n
+actually used. Here `reject_unwired_knobs_2d` refuses the combination (gate Gc6); `tauN_coeff` stays
+a legitimate dial with the closure off. The tie itself is measured, not assumed: against the
+solver's own `diff_coeffs_2d` at `D_sT = 0.1163`, `τ_n T/D_s` = 1.76170 / 1.91887 / 2.04388 /
+2.34277 / 2.81603 / 3.31253 GeV at T = 0.10 / 0.1565 / 0.20 / 0.30 / 0.45 / 0.60, equal to `h` in
+every digit printed.
+
+**Not measured yet.** The effect on a production IC, on `v₂`, and on a freeze-out surface. The size
+above is one geometry at one `D_sT` and should not be quoted as "the" correction.

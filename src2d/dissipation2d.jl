@@ -401,6 +401,30 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
                 dta = isfinite(αp) ? (work.alpha[i] - αp)/Δ : 0.0
 
                 nsx, nsy = ns_diffusion_target_2d(ux, uy, uτ, dxa, dya, dta, κ)
+
+                # THE CONSISTENT FIRST MOMENT (src2d/hq_consistent_firstmoment2d.jl).
+                # The five full-∇P sources ride on the SAME vacuum ramp as ν_NS: they
+                # are part of the same drive, and leaving them unramped would push a
+                # current into exactly the dilute cells the ramp exists to protect
+                # (D6/D9 in TWOD_PROGRAM.md — an unramped drive out there is how
+                # |ν|/n diverges and the charge row goes degenerate).
+                if model.consistent_fm
+                    Tp = work.T_prev[i]
+                    # No previous step ⇒ no ∂_τT. Dropping it is the same choice
+                    # kinematics_2d makes for ∂_τu^i, and for the same reason:
+                    # differencing against a fiction manufactures a spurious source.
+                    dtT = isfinite(Tp) ? (T - Tp)/Δ : 0.0
+                    dxT = (exp(work.yT[i+g.Nytot]) - exp(work.yT[i-g.Nytot]))/(2*g.dx)
+                    dyT = (exp(work.yT[i+1])       - exp(work.yT[i-1]))/(2*g.dy)
+                    h, hp = hq_h_hprime_2d(T, model.eos)
+                    dn_dT = hq_dn_dT_2d(T, n, model.eos)
+                    Ds    = safe_div(model.kappa_coeff, T) / fmGeV   # D_s from D_sT
+                    csx, csy = consistent_fm_source_2d(ux, uy, uτ, T, dxT, dyT, dtT,
+                                                       nux, nuy, n, dn_dT, τn, Ds, h, hp,
+                                                       θ, ax, ay, dxux, dxuy, dyux, dyuy)
+                    nsx += csx; nsy += csy
+                end
+
                 nsx *= wv; nsy *= wv        # ramp the drive out through the tail
 
                 # 2026-09-02 (D9): ramp the RELAXATION TIME by the same weight,
@@ -480,6 +504,15 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
     # over the step, matching src/dissipation.jl's note that refreshing it on entry
     # makes ∂_τα ≡ 0 and under-drives ν by ~2x.
     copyto!(work.alpha_prev, work.alpha)
+    # T_prev, for the consistent first moment's ∂_τT. Stored on the same schedule
+    # as alpha_prev (AFTER the substep, so the difference is a genuine backward
+    # difference over the step) and only when that closure is on, so a shipped run
+    # never pays for it. yT = log T is what the work array carries.
+    if model.consistent_fm
+        @inbounds for j in eachindex(work.T_prev)
+            work.T_prev[j] = exp(work.yT[j])
+        end
+    end
 
     return g.Nx*g.Ny
 end

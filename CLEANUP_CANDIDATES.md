@@ -83,8 +83,8 @@ Applied in the same spirit as the 2026-08-22 pass: untrack, do not delete; files
   out-of-order sections (§6c precedes §6a; there are two §6ab) and it is the *record*, which this
   repo keeps in place. What was missing was a reference entry point, and that is now in `README.md`
   ("Two solvers in one package") rather than by rewriting the log.
-- **The full 18-gate 2-D ladder is still not in CI.** Only the ~10 s fast tier is (see below).
-  Measured on this machine, 2026-09-08: the full ladder is **18/18 PASS in ≈70 min**, against ~1 min
+- **The full 2-D ladder is still not in CI.** Only the ~13 s fast tier is (see below).
+  Measured on this machine, 2026-09-08: the full ladder is **19/19 PASS in ≈70 min**, against ~1 min
   for `Pkg.test()`. Per-gate: shear algebra 2.4 s, primrec 5.2 s, primrec-vs-1d 3.5 s, then **G0
   Bjorken alone 70 s** — that cliff is where the fast tier stops. Splitting the rest behind a
   schedule or a label is the obvious next step and has not been done.
@@ -101,5 +101,5 @@ Applied in the same spirit as the 2026-08-22 pass: untrack, do not delete; files
   assigns the `Ref` directly. `main2IS2.jl` now accepts both names (default unchanged, still off).
 - 🪤 **A missing gate file counted as a PASS.** `run2d_gates.jl` printed `SKIP (not present)` and
   went on to report `N/N gates passed`. A deleted gate would have been invisible. Now a FAIL.
-- `run2d_gates.jl` gained `FIVO2D_TIER=fast` (3 algebra/recovery gates, ~10 s), wired into
+- `run2d_gates.jl` gained `FIVO2D_TIER=fast` (4 algebra/recovery gates, ~13 s), wired into
   `.github/workflows/ci.yml` so that `src2d/` has *some* automated cover.

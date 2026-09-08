@@ -49,6 +49,7 @@ include(joinpath(_SRC2D, "reconstruction2d.jl"))
 include(joinpath(_SRC2D, "bc2d.jl"))
 include(joinpath(_SRC2D, "rhs2d.jl"))
 include(joinpath(_SRC2D, "transport2d.jl"))
+include(joinpath(_SRC2D, "hq_consistent_firstmoment2d.jl"))
 include(joinpath(_SRC2D, "dissipation2d.jl"))
 include(joinpath(_SRC2D, "floors2d.jl"))
 include(joinpath(_SRC2D, "timestepper2d.jl"))
@@ -340,6 +341,7 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
         # NaN marks "no previous step": kinematics_2d then drops the ∂_τ u^i pieces
         # on the first relaxation substep rather than differencing against zero.
         fill!(wk.ux_prev, NaN); fill!(wk.uy_prev, NaN); fill!(wk.alpha_prev, NaN)
+        fill!(wk.T_prev, NaN)     # ∂_τT, read only by the consistent first moment
     end
 
     # one RHS pass to populate primitives and signal speeds before the first dt

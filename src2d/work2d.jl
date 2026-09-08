@@ -37,6 +37,10 @@ mutable struct Work2D
     ux_prev::Vector{Float64}
     uy_prev::Vector{Float64}
     alpha_prev::Vector{Float64}
+    # T_prev: only the consistent first moment needs ∂_τT (the ∇⊥T pressure-gradient
+    # channel and D ln h). NaN-seeded like the others; with no previous step both
+    # terms that use it are dropped rather than differenced against a fiction.
+    T_prev::Vector{Float64}
 
     # MUSCL slopes and face states, per direction
     sigx::Matrix{Float64}
@@ -113,7 +117,7 @@ function Work2D(nvar::Int, Ntot::Int; nthreads::Int = Threads.maxthreadid())
     Work2D(
         vec(), vec(), vec(), vec(), vec(), vec(), vec(), vec(), vec(), falses(Ntot),
         nanv(), nanv(), nanv(), nanv(),
-        nanv(), nanv(), nanv(),
+        nanv(), nanv(), nanv(), nanv(),
         pmat(), pmat(), pmat(), pmat(), pmat(), pmat(),
         mat(), mat(), mat(), mat(),
         mat(), mat(),
