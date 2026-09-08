@@ -366,6 +366,10 @@ const IS2_CONSISTENT_FM = Ref(get(ENV, "FIVO_IS2_CONSISTENT",
 # (π_r, π_perp, Π_Q) that Δ-projected Dπ does not have. So this is a REPLACEMENT of rows 3-5, not an
 # addition to them. Gate M4: the replacement reproduces Fluidum's `hqc_m2_rows(:consistent)` to
 # 1.7e-15 over 24 points × 3 rows.
+# Scratch for the PHYSICAL d alpha/d tau, stashed before IS2_FREEZE_PDE_ALPHA zeroes
+# dU[1] and read by the consistent second moment (see the note at that zeroing).
+const IS2_DTALPHA = Float64[]
+
 const IS2_CONSISTENT_M2 = Ref(get(ENV, "FIVO_IS2_CONSISTENT_M2", "0") == "1")
 # ── Consistent 5-field (2026-08-25): with IS2_CONSISTENT_FM AND use_cM, the c_M back-coupling is
 # applied as an EXPLICIT SOURCE built from the complete abstract-route row (hq_cm_force — includes
@@ -1238,7 +1242,8 @@ function _second_moment_eigen_rhs!(
             d3, d4, d5 = hq_consistent_m2_rhs(
                 τ, r, ur, T, dtT, drT, drur, dtur,
                 piR, piP, bPi, nur,
-                dU[1][i], dralpha, dtnur, drnur, (drR, drP, drB),
+                (IS2_FREEZE_PDE_ALPHA && length(IS2_DTALPHA) >= i ? IS2_DTALPHA[i] : dU[1][i]),
+                dralpha, dtnur, drnur, (drR, drP, drB),
                 n_local, tp.τn, tp.Ds, h_m2, hp_m2, tauM, etaM, hq_mass(eos))
         end
         # vacuum ramp (same as the first-moment fields)
@@ -1451,6 +1456,20 @@ function _compute_dUdt!(
             # alpha is corrected from the conservative q-transport after each full
             # step; freezing the PDE alpha increment avoids mixing two inconsistent
             # update paths inside the RK stages.
+            #
+            # ⚠ STASH THE PHYSICAL RATE BEFORE ZEROING IT. `_second_moment_eigen_rhs!`
+            # runs AFTER this loop, and the CONSISTENT trace row needs D alpha — it is
+            # that row's dominant term (hqc_m2_rows' at3[3,1] = etabar u^tau; the trace
+            # fixed point moves ACROSS ZERO for a 0.3 % change in it). Reading the
+            # frozen dU[1] handed it 0 instead of the true ~0.5, which put FiVo's Pi_Q
+            # on the wrong side of its own fixed point: measured, FiVo's trajectory was
+            # consistent with D alpha = 0.002 while the real rate was 0.42-0.95, and
+            # its Pi_Q stayed at +4.8e-3 where the shared RHS has its fixed point at
+            # -1.06e-3 (Fluidum, which does not freeze, sat on it).
+            # Freezing alpha's own UPDATE is deliberate and unchanged; only the rate
+            # the second moment reads is preserved.
+            length(IS2_DTALPHA) == Nr || resize!(IS2_DTALPHA, Nr)
+            IS2_DTALPHA[i] = dU[1][i]
             dU[1][i] = 0.0
         end
     end
