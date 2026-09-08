@@ -2862,3 +2862,51 @@ every digit printed.
 
 **Not measured yet.** The effect on a production IC, on `v₂`, and on a freeze-out surface. The size
 above is one geometry at one `D_sT` and should not be quoted as "the" correction.
+
+## 6af. The consistent SECOND moment in 2+1D (Gm), and the ladder at 20/20
+
+`src2d/hq_consistent_m2_2d.jl`, flag `IdealDiffVisc2DModel.consistent_m2`, default OFF. Gate
+`test_consistent_m22d.jl` (Gm), in the fast tier. Fluidum twin: `Matrix/HQ_2p1d_BG_m2.jl`.
+
+**What it closes.** 2-D had no second-moment sector at all. It now carries
+`(π_Q^{xx}, π_Q^{xy}, π_Q^{yy}, π_Q^η_η, Π_Q)` — three independent dofs stored as four plus the
+trace, exactly the medium shear's convention, so `shear_tensor_contravariant_2d` and
+`project_shear_traceless_2d` are reused rather than restated. Passive at `c_M = 0`: measured, a
+96² solve with the flag on reproduces `ν^x` **bit for bit** against the flag off.
+
+**⚠ Seven contractions need the metric, and that is the whole difficulty.** In the 1-D cylindrical
+chart the second-moment fields are components on a parallel-transported **orthonormal triad**, so
+every contraction looks like a plain product. Here they are **contravariant**, and lowering an index
+on a u-orthogonal tensor brings in its τ-row. Gate Gm1 took this file from 65 % to 2.3e-15 in six
+fixes, five of them that same mistake:
+
+| term | wrong form | error |
+|---|---|---|
+| σ_(ν) | the u-shear with u → ν | **65 %** |
+| class-(iv) rank-1 | hand-symmetrised, 2-direction trace | **2.69×** in φ |
+| π:σ | `pxx σxx + 2pxy σxy + …` | 3–5 % on Π_Q |
+| (iii) coupling | transverse indices only | sub-1 % on p_l |
+| a·ν, ν·∇(Th) | `ax νx + ay νy` | — |
+| π:σ trace subtraction | bare `πσ/3`, not `Δ^{ij}πσ/3` | 0.006–0.57 % |
+
+σ_(ν) is the one that is not merely a lowering: the projector acts on the full `∇^{(a}ν^{b)}`, whose
+τ-row involves `ν^τ = (u·ν)/u^τ` — a function of **u** — so it drags in gradients of u that no
+u → ν substitution can produce. It is generated (`Julia/tools/derive_signu_2p1d.wls`, 3/3), not
+hand-written.
+
+🪤 Two of the gate's *own* assumptions were also wrong, and both would have hidden a real error:
+the field correspondence between charts is a **projection** (`p_l = l_μl_νπ^{μν}`, not `π^{xx}` —
+15–320 %), and the Bjorken transverse block does **not** vanish (`σ^{xx} = σ^{yy} = −θ/3`; only the
+full `σ^{μν}` is traceless, via `σ^η_η = +2θ/3`). Gm4 now asserts the x↔y symmetry instead.
+
+**Cross-code.** `Projects/FiVoFluidumComparison/gate_2p1d_m2.jl`: Fluidum 2-D → Fluidum 1-D
+**1.0e-15** (N1), Fluidum rotational covariance **6.2e-16** (N2), **Fluidum 2-D == FiVo 2-D
+2.2e-16** (N3). N3 alone would prove nothing — two implementations can agree on the wrong thing;
+N1/N2 hold for each code against a reference the other never touches.
+
+**Convergence.** `converge_2p1d_m2.jl`, elliptic hot spot, N = 48/96/192: factors 1.57 / 2.33 /
+1.56 / 1.49 / 3.64 for `pxx, pxy, pyy, Π_Q, ν^x`; tracelessness residual **0.00e+00** at every
+resolution. ⚠ SELF-convergence — Fluidum has no live 2-D second-moment solver, so a cross-code
+*solve* comparison does not exist yet.
+
+**The ladder is 20/20 in ≈25 min** (2026-09-09), the fast tier 5/5 in 23 s.
