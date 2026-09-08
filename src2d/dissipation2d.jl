@@ -344,8 +344,15 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
                 cy = -Π.ty*aτ + Π.xy*ax + Π.yy*ay
 
                 A = safe_div(τπ*uτ, Δ)
-                den = A + 1 + δπ*θ
-                den = max(den, 1e-12)
+                # The second-order δ_ππθ term must not be able to cancel, let alone
+                # invert, the relaxation operator itself. Flooring at 1e-12 (as this
+                # did until 2026-09-08) turns a near-singular denominator into a
+                # ~1e12 amplification with nothing reporting it; flooring at half the
+                # first-order denominator bounds the term's effect at a factor 2.
+                # INERT in production — A ≈ 100 against |δ_ππθ| ≈ 2 — and the ladder
+                # is unchanged by it; it exists so that a compressive θ in a violent
+                # cell degrades gracefully instead of exploding silently.
+                den = max(A + 1 + δπ*θ, 0.5*(A + 1))
 
                 pd = model.shear_projected_deriv ? τπ : 0.0
                 ra = model.relax_advect_pi
@@ -442,7 +449,7 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
                 nua = -nut*aτ + nux*ax + nuy*ay
 
                 A = safe_div(τn*uτ, Δ)
-                den = max(A + 1 + δN*θ, 1e-12)
+                den = max(A + 1 + δN*θ, 0.5*(A + 1))   # see the shear block above
 
                 pdn = model.diff_projected_deriv ? τn : 0.0
                 anx = model.relax_advect_nu ? -τn*upw(L.iNux, i, ux, uy) : 0.0

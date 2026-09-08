@@ -127,21 +127,31 @@ end
     z = m / Tm
     z <= 0 && return 0.0
 
-    # For very large z (cold regime), use asymptotic approximation to avoid
-    # numerical instabilities from forward recurrence and catastrophic cancellation
+    # 2026-09-08: the old asymptotic here was DIMENSIONALLY WRONG. It returned
+    # `(DsT/48) m^2/Tm^2`, which is DIMENSIONLESS, where tau_n is a GeV^-1. The
+    # correct large-z limit follows from the identity below:
+    #
+    #     2K1 - 3K3 + K5 = 48 K3 / z^2      (exact, from K_{n+1} = K_{n-1} + 2n/z K_n)
+    #
+    # so the branch below is IDENTICALLY `tau_n = DsT z K3/K2 / Tm` at every z --
+    # the same closed form gate Gk checks against -- and its large-z limit is
+    # `DsT m/Tm^2`, not `(DsT/48) m^2/Tm^2`. The two differ by a constant factor
+    # m/48 = 0.031 for m = 1.5 GeV, and MEASURED across the branch point tau_n
+    # fell 40.03 fm -> 1.20 fm, a 33x discontinuity at z = 50 (T = 30 MeV).
+    #
+    # Nothing shipped was affected: z > 50 means T < m/50 = 0.030 GeV, below the
+    # vacuum cut T_vac_cut = 0.05 and far below freeze-out, so no production cell
+    # ever reached this branch. It is fixed rather than deleted because the branch
+    # still earns its place -- it is the cancellation-free form.
+    #
+    # `2K1 - 3K3 + K5` loses ~log10(z^2) digits to cancellation, so evaluating
+    # K3/K2 directly is also STRICTLY more accurate; the crossover is kept at
+    # z = 50 only so the well-tested path below is untouched in the physical range.
     if z > 50.0
-        # Asymptotic analysis: For large z, the besselkx functions have similar magnitude
-        # and the numerator (2*K1 - 3*K3 + K5) has leading-order cancellation.
-        # The ratio ~ O(1/z²) for large z, making τ ~ z³/Tm * O(1/z²) = z/Tm = m/Tm²
-        #
-        # To avoid overflow in z^3/Tm and ensure bounded behavior, we directly
-        # compute a saturated timescale based on the asymptotic limit.
-        # In the cold limit (T → 0), diffusion timescale should grow but remain finite.
-
-        # Asymptotic formula: τ ~ (DsT/48) * (m²/Tm²) with geometric mean regularization
-        # This gives bounded behavior even as T → 0
-        τ_GeVinv = (DsT / 48) * (m^2 / (Tm^2 + 1e-10))  # Regularized to avoid overflow
-        return min((τ_GeVinv / fmGeV) * tauD, 1e20)  # Cap at very large but finite value
+        K2a = SpecialFunctions.besselkx(2, z)
+        K3a = SpecialFunctions.besselkx(3, z)
+        τ_GeVinv = abs(K2a) > TINY ? DsT * z * (K3a / K2a) / Tm : DsT * z / Tm
+        return min((τ_GeVinv / fmGeV) * tauD, 1e20)
     end
 
     # For moderate z, use direct calculation of Bessel functions

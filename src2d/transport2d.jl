@@ -72,8 +72,30 @@ end
     z = m / Tm
     z <= 0 && return 0.0
 
+    # 2026-09-08: the old asymptotic here was DIMENSIONALLY WRONG. It returned
+    # `(DsT/48) m^2/Tm^2`, which is DIMENSIONLESS, where tau_n is a GeV^-1. The
+    # correct large-z limit follows from the identity below:
+    #
+    #     2K1 - 3K3 + K5 = 48 K3 / z^2      (exact, from K_{n+1} = K_{n-1} + 2n/z K_n)
+    #
+    # so the branch below is IDENTICALLY `tau_n = DsT z K3/K2 / Tm` at every z --
+    # the same closed form gate Gk checks against -- and its large-z limit is
+    # `DsT m/Tm^2`, not `(DsT/48) m^2/Tm^2`. The two differ by a constant factor
+    # m/48 = 0.031 for m = 1.5 GeV, and MEASURED across the branch point tau_n
+    # fell 40.03 fm -> 1.20 fm, a 33x discontinuity at z = 50 (T = 30 MeV).
+    #
+    # Nothing shipped was affected: z > 50 means T < m/50 = 0.030 GeV, below the
+    # vacuum cut T_vac_cut = 0.05 and far below freeze-out, so no production cell
+    # ever reached this branch. It is fixed rather than deleted because the branch
+    # still earns its place -- it is the cancellation-free form.
+    #
+    # `2K1 - 3K3 + K5` loses ~log10(z^2) digits to cancellation, so evaluating
+    # K3/K2 directly is also STRICTLY more accurate; the crossover is kept at
+    # z = 50 only so the well-tested path below is untouched in the physical range.
     if z > 50.0
-        τ_GeVinv = (DsT / 48) * (m^2 / (Tm^2 + 1e-10))
+        K2a = SpecialFunctions.besselkx(2, z)
+        K3a = SpecialFunctions.besselkx(3, z)
+        τ_GeVinv = abs(K2a) > TINY ? DsT * z * (K3a / K2a) / Tm : DsT * z / Tm
         return min((τ_GeVinv / fmGeV) * tauD, 1e20)
     end
 

@@ -92,15 +92,28 @@ mutable struct Work2D
 end
 
 # maxthreadid(): see the note on IdealPrimRec2D in primrec2d.jl.
+#
+# HISTORY LIVES HERE, NOT IN `run_sim_2d!`. The Newton warm starts (`x0_*`) and
+# the previous-substep values the covariant NS drives difference against
+# (`ux_prev`, `uy_prev`, `alpha_prev`) are seeded with NaN, which is the
+# "no previous step" marker `cons_to_prim_2d!` and `kinematics_2d` both test for.
+# Seeding them with 0.0 would be WRONG in a way that does not announce itself:
+# `kinematics_2d` would read `have_prev = true` and difference against u = 0,
+# manufacturing a spurious ∂_τu on the first step.
+#
+# Because the history is a property of the WORK ARRAY, a caller that hands the
+# same `work` to successive `run_sim_2d!` calls keeps it across the joins -- see
+# `reset_history` in main2D.jl.
 function Work2D(nvar::Int, Ntot::Int; nthreads::Int = Threads.maxthreadid())
     vec()  = zeros(Float64, Ntot)
+    nanv() = fill(NaN, Ntot)
     mat()  = zeros(Float64, nvar, Ntot)
     pmat() = zeros(Float64, NPRIM_REC_2D, Ntot)
 
     Work2D(
         vec(), vec(), vec(), vec(), vec(), vec(), vec(), vec(), vec(), falses(Ntot),
-        vec(), vec(), vec(), vec(),
-        vec(), vec(), vec(),
+        nanv(), nanv(), nanv(), nanv(),
+        nanv(), nanv(), nanv(),
         pmat(), pmat(), pmat(), pmat(), pmat(), pmat(),
         mat(), mat(), mat(), mat(),
         mat(), mat(),

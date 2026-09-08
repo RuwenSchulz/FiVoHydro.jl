@@ -227,17 +227,129 @@ function sanitize_stage_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64,
 end
 
 # ------------------------------------------------------------------------------
+# ADMISSIBILITY — the predicate the MOOD escalation turns on
+# ------------------------------------------------------------------------------
+#
+# 🔴 2026-09-08. Until this pass the 2-D MOOD escalation and the dt-halving retry
+# were UNREACHABLE, and nothing said so. `state_ok_2d` tested exactly the three
+# invariants `sanitize_stage_2d!` had just imposed one line earlier — every cell
+# finite, `E >= Emin`, `D >= 0` — so it could not fail. MEASURED: over 2000
+# deliberately pathological states (NaN, -Inf, huge negatives) pushed through
+# `sanitize_stage_2d!`, `state_ok_2d` returned true 2000/2000, while the old
+# `mark_bad_2d!` would have flagged cells in all 2000 — but it is only ever CALLED
+# after `state_ok_2d` returns false. `force_first_order`, `mark_bad_2d!`,
+# `expand_bad_2d!` and the Δ-halving retry were all dead code.
+#
+# That is very likely what main2D.jl's own end-of-run note was seeing: a
+# single-event IC ran to completion with |pi|/P = 1e12 and max|u| = 58 and
+# "succeeded by every criterion the solver had".
+#
+# The old `mark_bad_2d!` bound was independently too loose: `χ(E + |E|) = 2χE`,
+# against a physical `|S| <= E + P` with `P <= E/3`. MEASURED: states with
+# `1.0 <= |S|/E < 2.0` are NOT invertible by `cons_to_prim_2d!`
+# (PRR_RESIDUAL_TOO_LARGE) and the old detector flagged none of them.
+#
+# The fix mirrors `src/mood.jl:admissible_state_fast`, which is the 1-D solver's
+# answer and does not have this defect. Cheap filters first, and the arbiter for
+# anything near the causal bound is the ONE test that actually matters: run the
+# primitive recovery and see whether it inverts.
+#
+#   1. non-finite, or `E < Emin`, or `D < 0`                        -> inadmissible
+#   2. any non-finite dissipative dof                               -> inadmissible
+#   3. near-vacuum (`E <= 1e6 Emin`, the same branch enforce_floors_2d! uses)
+#                                                                   -> admissible
+#   4. last recovery's |v| >= 1                                     -> inadmissible
+#   5. `|S| <= SR_MARGIN_2D χ (E + P + |Π| + Σ|π|)`                  -> admissible
+#   6. otherwise: `cons_to_prim_2d!`, and PRR_VACUUM counts as admissible
+#
+# `SR_MARGIN_2D < 1` is what makes this NON-VACUOUS, and is the whole point:
+# `enforce_S_energy_constraint_2d!` rescales an over-the-bound cell to EXACTLY
+# `χ(E + Peff)`, so a test at `χ` would again be satisfied by construction. The
+# margin leaves a band in which the sanitiser's repair is not taken on trust but
+# checked by inversion. It is 1-D's `sr_margin()` device, one file over.
+const SR_MARGIN_2D = 0.98
+
+"""
+    cell_admissible_2d(U, i, τ, model, work, L; Emin, χ, v_eps) -> Bool
+
+Whether cell `i` carries a state the scheme can actually invert. See the block
+above for why this is not the same question as "did the floors run".
+
+`work` may be `nothing`; the velocity and pressure filters are then skipped and
+more cells fall through to the recovery, which is slower but never wrong.
+"""
+function cell_admissible_2d(U::AbstractMatrix, i::Int, τ::Float64,
+                            model::IdealDiffVisc2DModel,
+                            work::Union{Nothing,Work2D}, L::StateLayout2D;
+                            Emin::Float64 = E_FLOOR, χ::Float64 = χ_SrE,
+                            v_eps::Float64 = 1e-12)
+    @inbounds begin
+        E = U[L.iE,i]; Sx = U[L.iSx,i]; Sy = U[L.iSy,i]; Dt = U[L.iDtau,i]
+        (isfinite(E) & isfinite(Sx) & isfinite(Sy) & isfinite(Dt)) || return false
+        (E >= Emin) || return false
+        (Dt >= 0.0) || return false
+
+        if L.hasNu
+            (isfinite(U[L.iNux,i]) & isfinite(U[L.iNuy,i])) || return false
+        end
+        if L.hasPi
+            isfinite(U[L.iPi,i]) || return false
+        end
+        if L.hasShear
+            (isfinite(U[L.iPixx,i]) & isfinite(U[L.iPixy,i]) &
+             isfinite(U[L.iPiyy,i]) & isfinite(U[L.iPieta,i])) || return false
+        end
+
+        # Near-vacuum: `enforce_floors_2d!` has already blanked momentum, charge
+        # and the dissipatives here, and there is no state left to decide. The
+        # 1-D predicate has the same escape (`E < 100 Emin`).
+        E <= 1e6*Emin && return true
+
+        if work !== nothing && work.ok[i]
+            vx = work.vxC[i]; vy = work.vyC[i]
+            (isfinite(vx) & isfinite(vy)) || return false
+            (vx*vx + vy*vy) < (1 - v_eps)^2 || return false
+        end
+
+        Peff = 0.0
+        if work !== nothing
+            p = work.P[i]
+            isfinite(p) && (Peff = max(p, 0.0))
+        end
+        if L.hasPi
+            v = phys_from_stored(U[L.iPi,i]); isfinite(v) && (Peff += abs(v))
+        end
+        if L.hasShear
+            for k in (L.iPixx, L.iPixy, L.iPiyy, L.iPieta)
+                v = phys_from_stored(U[k,i]); isfinite(v) && (Peff += abs(v))
+            end
+        end
+        hypot(Sx, Sy) <= SR_MARGIN_2D*χ*(E + Peff) && return true
+
+        # Within the margin of the causal bound: settle it by inverting.
+        wpr = model.primrec.work[Threads.threadid()]
+        nux, nuy, Pi, pixx, pixy, piyy, pieta = dissipatives_at(U, i, L)
+        _, _, _, _, _, _, _, ok = cons_to_prim_2d!(
+            wpr, safe_div(Dt, τ), Sx, Sy, E, nux, nuy, Pi,
+            pixx, pixy, piyy, pieta, τ, model.eos)
+        return ok || wpr.last_reason == PRR_VACUUM
+    end
+end
+
+# ------------------------------------------------------------------------------
 # MOOD detection
 # ------------------------------------------------------------------------------
 
 """
-    mark_bad_2d!(bad, U, g, model; Emin, χ) -> count
+    mark_bad_2d!(bad, U, g, τ, model, work; Emin, χ) -> count
 
-Flag cells that are inadmissible AFTER the floors have run — i.e. genuinely
-undecidable states rather than vacuum. These drive the first-order fallback.
+Flag every cell `cell_admissible_2d` rejects. Same predicate `state_ok_2d` uses,
+so the mask always covers what made the stage unacceptable — before this pass the
+two used different bounds and the mask could come back empty on a rejected stage.
 """
-function mark_bad_2d!(bad::BitVector, U::AbstractMatrix, g::Grid2D,
-                      model::IdealDiffVisc2DModel;
+function mark_bad_2d!(bad::BitVector, U::AbstractMatrix, g::Grid2D, τ::Float64,
+                      model::IdealDiffVisc2DModel,
+                      work::Union{Nothing,Work2D} = nothing;
                       Emin::Float64 = E_FLOOR, χ::Float64 = χ_SrE)
     L = model.layout
     ng = g.nghost
@@ -245,10 +357,7 @@ function mark_bad_2d!(bad::BitVector, U::AbstractMatrix, g::Grid2D,
     nbad = 0
     @inbounds for ix in (ng+1):(ng+g.Nx), iy in (ng+1):(ng+g.Ny)
         i = lin(g, ix, iy)
-        Ei = U[L.iE,i]; Sx = U[L.iSx,i]; Sy = U[L.iSy,i]; Di = U[L.iDtau,i]
-        isbad = !isfinite(Ei) || !isfinite(Sx) || !isfinite(Sy) || !isfinite(Di) ||
-                Ei < Emin || Di < 0.0 || hypot(Sx, Sy) > χ*(Ei + abs(Ei))
-        if isbad
+        if !cell_admissible_2d(U, i, τ, model, work, L; Emin = Emin, χ = χ)
             bad[i] = true; nbad += 1
         end
     end

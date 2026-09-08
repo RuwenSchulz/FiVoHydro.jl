@@ -9,7 +9,7 @@ bulk solver evolves `(T, u^r, Π, π^{φφ}, π^{ηη})` together with the charg
 Scheme: HLLE Riemann solver + MUSCL (MC limiter) reconstruction in primitive variables + SSPRK2/3
 method-of-lines, with operator-split relaxation of the dissipative fields and a MOOD fallback. Geometry
 is radial Milne, so the native analytic references are Gubser and Bjorken flow; planar shock tubes are
-covered by the flat-Cartesian sibling `FiVo2D` in the benchmark suite.
+covered by the flat-Cartesian sibling `FiVo2DIdeal` (`Julia/FiVo2DIdeal.jl`, its own submodule).
 
 This package is a git submodule of `phd-git`; it is consumed almost entirely by `include`-ing one of
 the driver files below from project scripts run with `--project=Julia/FiVoHydro.jl`.

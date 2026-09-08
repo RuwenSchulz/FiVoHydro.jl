@@ -33,7 +33,9 @@
 #     `gubser_temperature`. So the ODE solver, the rho(tau,r) map and the Weyl
 #     weight are all checked against an independently-written formula.
 #  2. at small tau_pi the shear must relax onto Navier-Stokes,
-#     pibar_NS = -(4/3)(eta/s) tanh(rho)/T_hat.
+#     pibar_NS = +(4/3)(eta/s) tanh(rho)/T_hat.   (sign fixed 2026-09-08: the ODE's
+#     own fixed point -pibar/tau_pi_hat + (4/15)tanh(rho) = 0 gives the PLUS, as do
+#     `solve_ode`'s seed and the assertion below; only this line carried a minus.)
 #
 # ⚠ The comparison is run at SMALL eta/s on purpose. There the solution sits near
 # the NS limit, so the reference is insensitive to the tau_pi convention — which

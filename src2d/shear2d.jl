@@ -110,10 +110,23 @@ Restore tracelessness by correcting `pieta` alone:
 Returns the corrected value and the size of the correction (= the residual `R`
 that was present). The transverse block is untouched, so x↔y symmetry is exact.
 
-`pieta_new` is bounded by `max|π^{ij}|`: `π^{ττ}_orth` is a convex-weighted
-combination of the transverse components with weights `(u^i u^j)/(u^τ)² < 1`, so
-this projection cannot amplify. Contrast with eliminating `π^{xx}` instead, which
-carries a `1/(1 + (u^y)²)` denominator — safe, but x↔y asymmetric.
+⚠ CORRECTED 2026-09-08. This used to claim `π^{ττ}_orth` is a convex-weighted
+combination of the transverse block with weights `(u^iu^j)/(u^τ)² < 1`, hence that
+the projection "cannot amplify". That is FALSE. The individual weights are each
+below 1, but they do not sum to 1 — the cross term is counted twice, and
+
+    Σ|weights| = (|u^x| + |u^y|)² / (u^τ)² = (|u^x| + |u^y|)² / (1 + (u^x)² + (u^y)²)
+
+crosses 1 at `u^x = u^y = 1/√2` (|v| ≈ 0.707) and tends to 2 as |u| → ∞. MEASURED
+`|π^{ττ}|/max|π^{ij}|` on an aligned-sign block: 0.086 at u = (0.2, 0.1), 1.33 at
+(1,1), 1.78 at (2,2), 1.96 at (5,5).
+
+The sharp statement is `|π^{ττ}_orth| ≤ 2 max|π^{ij}|`, so the projection is
+BOUNDED but not non-amplifying, and the bound is approached only at ultra-
+relativistic transverse flow. The reason to correct `pieta` rather than eliminate
+`π^{xx}` is UNAFFECTED and is the x↔y symmetry argument above — eliminating
+`π^{xx}` carries a `1/(1 + (u^y)²)` denominator which is perfectly safe, but
+singles out one transverse axis, which gate G4 could not then measure honestly.
 """
 @inline function project_shear_traceless_2d(
     ux::Float64, uy::Float64, uτ::Float64,

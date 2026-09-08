@@ -292,6 +292,58 @@ end
 """
     cons_to_prim_2d!(w, D, Sx, Sy, E, nux, nuy, Pi, pixx, pixy, piyy, pieta, τ, eos; ...)
 
+Recover primitives, retrying from the FRESH SEED if the warm start fails.
+
+🔴 2026-09-08. A warm start that has gone stale does not merely cost iterations —
+it lands the Newton in a basin it cannot leave, and the cell was then declared a
+failure and reset to COLD VACUUM (`T = T_MIN`, `u = 0`, `n = 0`) by
+`_primitive_pass!`. That is a hole punched in `work.yT/ux/uy` for a cell holding
+perfectly good matter, and MUSCL reconstructs its neighbours' faces through it.
+
+MEASURED on the G9 single-event IC (N=200, 316 steps to τ=8): of the cells
+`_primitive_pass!` could not recover, 9 429 560 were near-vacuum and EXPECTED,
+and **8 625 held real matter — 27.3 per step. Re-running `cons_to_prim_2d!` on
+exactly the same conserved state with a fresh seed inverted 100.0 % of them**
+(0 genuinely non-invertible). That 8625 is exactly the `pf = 8625` gate G9
+reports, so the whole of its "primfail" population was this, not bad states.
+
+The fresh seed is a genuinely different starting point — `seed_from_conserved_2d`
+inverts the IDEAL relations in closed form — so this is a second basin, not a
+second pass at the same one. The retry runs only after a failure (27 cells per
+step out of 40 000), so it is free.
+
+No retry when the first attempt reported `PRR_VACUUM` (there is no state to find)
+or when there was no warm start to begin with (the fresh seed is what already ran).
+"""
+function cons_to_prim_2d!(w::PrimRecWork2D,
+                          D::Float64, Sx::Float64, Sy::Float64, E::Float64,
+                          nux::Float64, nuy::Float64, Pi::Float64,
+                          pixx::Float64, pixy::Float64, piyy::Float64, pieta::Float64,
+                          τ::Float64, eos;
+                          yT0::Float64 = NaN, φ0::Float64 = NaN,
+                          ux0::Float64 = NaN, uy0::Float64 = NaN,
+                          maxit::Int = 80, tol_res::Float64 = 1e-12)
+
+    res = _cons_to_prim_attempt_2d!(w, D, Sx, Sy, E, nux, nuy, Pi,
+                                    pixx, pixy, piyy, pieta, τ, eos;
+                                    yT0 = yT0, φ0 = φ0, ux0 = ux0, uy0 = uy0,
+                                    maxit = maxit, tol_res = tol_res)
+    res[8] && return res                                   # converged
+    w.last_reason === PRR_VACUUM && return res             # nothing to find
+    (isfinite(yT0) && isfinite(ux0) && isfinite(uy0)) || return res   # was already cold
+
+    return _cons_to_prim_attempt_2d!(w, D, Sx, Sy, E, nux, nuy, Pi,
+                                     pixx, pixy, piyy, pieta, τ, eos;
+                                     yT0 = NaN, φ0 = NaN, ux0 = NaN, uy0 = NaN,
+                                     maxit = maxit, tol_res = tol_res)
+end
+
+"""
+    _cons_to_prim_attempt_2d!(w, D, Sx, Sy, E, nux, nuy, Pi, pixx, pixy, piyy, pieta, τ, eos; ...)
+
+ONE Newton solve. `cons_to_prim_2d!` above wraps this with the fresh-seed retry;
+call that, not this.
+
 Returns `(T, μ, ux, uy, n, e, P, ok)`.
 
 `D` is `J^τ`, i.e. `U[iDtau]/τ` — the τ weight is stripped by the caller, exactly
@@ -309,7 +361,7 @@ production solver achieves at the dilute edge (3.3e-12, see
 test_primrec2d_vs_1d.jl) and ten orders below any quoted number. The round-trip
 gates measure what it actually costs rather than assuming.
 """
-function cons_to_prim_2d!(w::PrimRecWork2D,
+function _cons_to_prim_attempt_2d!(w::PrimRecWork2D,
                           D::Float64, Sx::Float64, Sy::Float64, E::Float64,
                           nux::Float64, nuy::Float64, Pi::Float64,
                           pixx::Float64, pixy::Float64, piyy::Float64, pieta::Float64,

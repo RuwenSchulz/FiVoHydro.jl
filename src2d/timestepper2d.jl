@@ -20,6 +20,11 @@
 # covered, and the stage is REDONE with piecewise-constant reconstruction there.
 # Only if that also fails does the step halve. Same escalation as
 # src/timestepper.jl (mark_bad! -> expand_bad! -> retry with force_first_order).
+#
+# ⚠ THAT PARAGRAPH WAS FALSE UNTIL 2026-09-08. `state_ok_2d` tested exactly the
+# invariants `sanitize_stage_2d!` imposes, so it could not fail and none of the
+# escalation ever ran. `cell_admissible_2d` (src2d/floors2d.jl) is now the
+# predicate, and the block above it carries the measurement.
 # ==============================================================================
 
 """
@@ -41,14 +46,21 @@ function compute_dt_2d(work::Work2D, g::Grid2D, τ::Float64;
     return min(dt_cfl, dt_tau)
 end
 
-"""State admissibility: positive charge and above-floor energy on the interior."""
-function state_ok_2d(U::AbstractMatrix, g::Grid2D, L::StateLayout2D; Emin::Float64 = E_FLOOR)
+"""
+    state_ok_2d(U, g, model, work, τ; Emin, χ) -> Bool
+
+Is every interior cell one the scheme can invert? `cell_admissible_2d`
+(src2d/floors2d.jl) is the predicate; the block above it says why this used to be
+a tautology and what that cost.
+"""
+function state_ok_2d(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel,
+                     work::Union{Nothing,Work2D}, τ::Float64;
+                     Emin::Float64 = E_FLOOR, χ::Float64 = χ_SrE)
+    L = model.layout
     ng = g.nghost
     @inbounds for ix in (ng+1):(ng+g.Nx), iy in (ng+1):(ng+g.Ny)
-        i = lin(g, ix, iy)
-        (isfinite(U[L.iE,i]) && U[L.iE,i] >= Emin) || return false
-        (isfinite(U[L.iDtau,i]) && U[L.iDtau,i] >= 0.0) || return false
-        (isfinite(U[L.iSx,i]) && isfinite(U[L.iSy,i])) || return false
+        cell_admissible_2d(U, lin(g, ix, iy), τ, model, work, L;
+                           Emin = Emin, χ = χ) || return false
     end
     return true
 end
@@ -70,10 +82,16 @@ function step_ssprk2_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δτ::Float6
     for _ in 0:max_halve
         copyto!(work.U2, U)                       # keep the entry state
 
-        ok1 = _stage_2d!(work.U1, U, work.U2, U, g, τ, Δ, 1.0, 0.0, model, work, bc,
+        # `τ` is the RHS evaluation time; `τ + Δ` is the time the OUTPUT state
+        # lives at, and it is the latter that the sanitiser and the admissibility
+        # test must use (`J^τ = U[iDtau]/τ`, and the shear τ² factor). Stage 1 used
+        # to be sanitised at `τ` — TWOD_PROGRAM.md D11, cosmetic at ≤ CFLτ = 5 %,
+        # closed here because the new admissibility test inverts the state and so
+        # needs the right τ to do it.
+        ok1 = _stage_2d!(work.U1, U, work.U2, U, g, τ, τ + Δ, Δ, 1.0, 0.0, model, work, bc,
                          max_mood, nv, Ntot, L)
         if ok1
-            ok2 = _stage_2d!(U, work.U1, work.U2, work.U1, g, τ + Δ, Δ, 0.5, 0.5,
+            ok2 = _stage_2d!(U, work.U1, work.U2, work.U1, g, τ + Δ, τ + Δ, Δ, 0.5, 0.5,
                              model, work, bc, max_mood, nv, Ntot, L)
             ok2 && return true, Δ
         end
@@ -94,7 +112,8 @@ weight `wold` multiplies (the step's entry state for the second SSPRK2 stage).
 """
 function _stage_2d!(Uout::AbstractMatrix, Uin::AbstractMatrix,
                     Uold::AbstractMatrix, Ubase::AbstractMatrix,
-                    g::Grid2D, τ::Float64, Δ::Float64, wold::Float64, wnew::Float64,
+                    g::Grid2D, τ::Float64, τ_state::Float64, Δ::Float64,
+                    wold::Float64, wnew::Float64,
                     model::IdealDiffVisc2DModel, work::Work2D, bc::Symbol,
                     max_mood::Int, nv::Int, Ntot::Int, L::StateLayout2D)
     mask = nothing
@@ -109,11 +128,11 @@ function _stage_2d!(Uout::AbstractMatrix, Uin::AbstractMatrix,
                 Uout[a,i] = wold*Uold[a,i] + wnew*(Uin[a,i] + Δ*work.k[a,i])
             end
         end
-        sanitize_stage_2d!(Uout, g, τ, model, work; bc = bc)
-        state_ok_2d(Uout, g, L) && return true
+        sanitize_stage_2d!(Uout, g, τ_state, model, work; bc = bc)
+        state_ok_2d(Uout, g, model, work, τ_state) && return true
 
         attempt == max_mood && return false
-        mark_bad_2d!(work.bad, Uout, g, model)
+        mark_bad_2d!(work.bad, Uout, g, τ_state, model, work)
         expand_bad_2d!(work.bad, work.bad_tmp, g; radius = 1 + attempt)
         mask = work.bad
     end
@@ -141,7 +160,7 @@ function step_ssprk3_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δτ::Float6
             work.U1[a,i] = U[a,i] + Δ*work.k[a,i]
         end
         sanitize_stage_2d!(work.U1, g, τ + Δ, model, work; bc = bc)
-        if !state_ok_2d(work.U1, g, L)
+        if !state_ok_2d(work.U1, g, model, work, τ + Δ)
             copyto!(U, work.U2); Δ *= 0.5; continue
         end
 
@@ -150,7 +169,7 @@ function step_ssprk3_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δτ::Float6
             work.U1[a,i] = 0.75*work.U2[a,i] + 0.25*(work.U1[a,i] + Δ*work.k[a,i])
         end
         sanitize_stage_2d!(work.U1, g, τ + Δ, model, work; bc = bc)
-        if !state_ok_2d(work.U1, g, L)
+        if !state_ok_2d(work.U1, g, model, work, τ + Δ)
             copyto!(U, work.U2); Δ *= 0.5; continue
         end
 
@@ -159,7 +178,7 @@ function step_ssprk3_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δτ::Float6
             U[a,i] = (work.U2[a,i] + 2.0*(work.U1[a,i] + Δ*work.k[a,i]))/3.0
         end
         sanitize_stage_2d!(U, g, τ + Δ, model, work; bc = bc)
-        if state_ok_2d(U, g, L)
+        if state_ok_2d(U, g, model, work, τ + Δ)
             return true, Δ
         end
 

@@ -8,7 +8,7 @@
 #
 # The scheme is UNSPLIT: x and y slopes are built independently on the same cell
 # data and both flux divergences are summed into one dU per RK stage. That is the
-# structure `Julia/Projects/FiVoBenchmark/fivo2d.jl` already validates on the 2-D
+# structure `Julia/FiVo2DIdeal.jl` already validates on the 2-D
 # Riemann and cylindrical-explosion benchmarks.
 #
 # Directions are handled by STRIDE over the flat index: +1 steps in y (contiguous),

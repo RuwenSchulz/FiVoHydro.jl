@@ -303,6 +303,7 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
                      CFL::Float64 = 0.2, CFLτ::Float64 = 0.05,
                      integrator::Symbol = :ssprk2, bc::Symbol = :outflow,
                      work::Union{Nothing,Work2D} = nothing,
+                     reset_history::Bool = (work === nothing),
                      on_dump = nothing, dump_dt::Float64 = 0.5,
                      max_steps::Int = 2_000_000, verbose::Bool = false)
 
@@ -310,11 +311,36 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
     wk   = work === nothing ? make_work(g, model) : work
     step = integrator === :ssprk3 ? step_ssprk3_2d! : step_ssprk2_2d!
 
-    fill!(wk.x0_yT, NaN); fill!(wk.x0_phi, NaN)
-    fill!(wk.x0_ux, NaN); fill!(wk.x0_uy, NaN)
-    # NaN marks "no previous step": kinematics_2d then drops the ∂_τ u^i pieces on
-    # the first relaxation substep rather than differencing against zero.
-    fill!(wk.ux_prev, NaN); fill!(wk.uy_prev, NaN); fill!(wk.alpha_prev, NaN)
+    # ---- ∂_τ HISTORY ACROSS A RESTART ----------------------------------------
+    # This used to reset unconditionally, and that made `run_sim_2d!` NOT
+    # RESTART-NEUTRAL: `kinematics_2d` reads `ux_prev`/`uy_prev`/`alpha_prev` for
+    # the ∂_τ pieces of the covariant NS drives, so the FIRST relaxation substep
+    # of every call dropped them. Chunked drivers therefore ran with a different
+    # shear target than a single continuous call.
+    #
+    # MEASURED on a tau = 0.4 -> 3.0 elliptic run, over cells above T_fo, this is
+    # what one restart step throws away:
+    #     sigma^{ij}   median 0.5 %   p90 1.9 %   max 3.1 %
+    #     Dalpha       median 2 %     p90 10 %
+    # (theta is nearly unaffected, 0.2 %, because its ∂_τ piece is u^i∂_τu^i/u^τ.)
+    # Harmless when a chunk is many steps; `freezeout2d.jl` chunks at dtau = 0.02
+    # against a CFL step of the SAME SIZE, i.e. about one step per call, so the
+    # whole freeze-out evolution ran with those terms off.
+    #
+    # The history now belongs to the work array (Work2D seeds it with NaN), so the
+    # default is: reset when we allocated the work ourselves, keep it when the
+    # caller handed us one. Every existing caller allocates its `wk` immediately
+    # before its own evolution and reuses it for nothing else (verified by grep,
+    # 2026-09-08), so this is exactly "one work array, one evolution". Pass
+    # `reset_history = true` explicitly to reuse a work array across UNRELATED
+    # runs, and `false` to keep it across a join.
+    if reset_history
+        fill!(wk.x0_yT, NaN); fill!(wk.x0_phi, NaN)
+        fill!(wk.x0_ux, NaN); fill!(wk.x0_uy, NaN)
+        # NaN marks "no previous step": kinematics_2d then drops the ∂_τ u^i pieces
+        # on the first relaxation substep rather than differencing against zero.
+        fill!(wk.ux_prev, NaN); fill!(wk.uy_prev, NaN); fill!(wk.alpha_prev, NaN)
+    end
 
     # one RHS pass to populate primitives and signal speeds before the first dt
     rhs_2d!(wk.k, U, g, τ0, model, wk; bc = bc)
@@ -381,11 +407,16 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
     on_dump !== nothing && on_dump(τ, U, wk)
 
     # ---- END-OF-RUN DIAGNOSTICS ----
-    # `ok` is NOT a statement that the run is physically trustworthy. It is
-    # `state_ok_2d`: every cell finite, E above the floor, D_tau non-negative. A
-    # single-event IC has satisfied all of that while |pi|/P ran to 1e12, max|u|
-    # reached 58 and 60% of the charge left the grid (TWOD_PROGRAM.md §6j) — the
-    # run "succeeded" by every criterion the solver had.
+    # `ok` is NOT a statement that the run is physically trustworthy. A
+    # single-event IC has satisfied it while |pi|/P ran to 1e12, max|u| reached 58
+    # and 60% of the charge left the grid (TWOD_PROGRAM.md §6j) — the run
+    # "succeeded" by every criterion the solver had.
+    #
+    # Part of that WAS the criterion: until 2026-09-08 `state_ok_2d` tested only
+    # the invariants the sanitiser had just imposed, so it could not fail and the
+    # MOOD/dt-halving escalation never ran. It now inverts the state
+    # (`cell_admissible_2d`), which is a real test — but `ok` still says nothing
+    # about |pi|/P, max|u| or charge loss, so the diagnostics below stay.
     #
     # So return the two numbers a caller needs to disbelieve it. Both are one pass
     # over the interior and are computed once, at the end. Neither changes the
