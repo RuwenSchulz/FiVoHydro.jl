@@ -504,7 +504,23 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
                     pQyy = phys_from_stored(U[L.iPQyy,i]); pQeta = phys_from_stored(U[L.iPQeta,i])
                     PiQv = phys_from_stored(U[L.iPiQ,i])
                     τMq = tauM_charm_2d(T, τn)
-                    if τMq > 0.0
+                    # 🔴 2026-09-09. SKIP the update until the D_tau history exists.
+                    # On the first substep `alpha_prev` and `T_prev` are NaN-seeded,
+                    # so `dta` and `dtT2` fall back to ZERO and the row is driven by
+                    # a D alpha and a D ln T that are not merely inaccurate but
+                    # ABSENT. Those two are the dominant terms of the trace channel
+                    # (etabar*(A/B DlnT + 5/3 theta + D alpha) with A/B ~ 6.8), and
+                    # with both zeroed the instantaneous fixed point comes out
+                    # -0.169 against a steady -0.011: a FIFTEENFOLD overshoot on
+                    # step one. Measured, Pi_Q then spends the whole run climbing
+                    # back out of that hole and crosses zero at tau ~ 0.55, ending
+                    # POSITIVE where the drive and the closed-form fixed point are
+                    # both NEGATIVE -- which is exactly the cos = -0.995 against
+                    # Fluidum. Starting the moments one step later costs nothing:
+                    # they are initialised to zero anyway and tau_M ~ 0.26 fm is
+                    # many steps.
+                    have_hist = isfinite(work.alpha_prev[i]) && isfinite(work.T_prev[i])
+                    if τMq > 0.0 && have_hist
                         # a_ν^i = Dν^i, from the pre-relaxation snapshot so every
                         # cell sees the same stage (the reason `Q` exists).
                         dtnx = isfinite(work.nux_prev[i]) ? (nux - work.nux_prev[i])/Δ : 0.0
