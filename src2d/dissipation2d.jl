@@ -602,10 +602,10 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
     # store the current velocity for the next step's ∂_τ u^i
     copyto!(work.ux_prev, work.ux)
     copyto!(work.uy_prev, work.uy)
-    # α_prev is stored AFTER the substep so ∂_τα is a genuine backward difference
-    # over the step, matching src/dissipation.jl's note that refreshing it on entry
-    # makes ∂_τα ≡ 0 and under-drives ν by ~2x.
-    copyto!(work.alpha_prev, work.alpha)
+    # ⚠ alpha_prev and T_prev are NOT written here. They are captured in
+    # run_sim_2d!, BEFORE update_primitives_2d! advances the primitives -- writing
+    # them here sets them to the values the next step differences against itself,
+    # since this routine never writes work.alpha or work.yT. See the note there.
     # ν history for the charm second moment's ∂_τν, on the same schedule.
     if model.consistent_m2 && model.layout.hasNu
         @inbounds for j in 1:g.Ntot
@@ -613,15 +613,7 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
             work.nuy_prev[j] = phys_from_stored(U[model.layout.iNuy, j])
         end
     end
-    # T_prev, for the consistent first moment's ∂_τT. Stored on the same schedule
-    # as alpha_prev (AFTER the substep, so the difference is a genuine backward
-    # difference over the step) and only when that closure is on, so a shipped run
-    # never pays for it. yT = log T is what the work array carries.
-    if model.consistent_fm || model.consistent_m2
-        @inbounds for j in eachindex(work.T_prev)
-            work.T_prev[j] = exp(work.yT[j])
-        end
-    end
+
 
     return g.Nx*g.Ny
 end

@@ -390,6 +390,24 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
         # velocity GRADIENTS, so relaxing on the last RK stage's stale primitives
         # would be a needless error inside an already first-order splitting.
         if model.enable_shear || model.enable_bulk || model.enable_diff
+            # 🔴 2026-09-09. alpha_prev/T_prev must be captured HERE, from the
+            # PREVIOUS step's primitives, not at the end of the relaxation.
+            # `relax_dissipative_2d!` only READS work.yT and work.alpha -- it never
+            # writes them -- so storing the history there set X_prev to the value the
+            # next step then differences against ITSELF: measured, alpha_prev == alpha
+            # and T_prev == T EXACTLY (max|diff| = 0.0 over every hot cell), making
+            # D alpha and D ln T IDENTICALLY ZERO. That is the failure
+            # src/dissipation.jl warns about, reintroduced by the 2-D port in the
+            # mirror-image way, and it is invisible to every RHS gate because those
+            # take these derivatives as INPUTS. u^i and nu^i are NOT captured here:
+            # nu is written by the relaxation itself, so its history belongs at the
+            # end of it, where it already is.
+            if nsteps > 0 && (model.consistent_fm || model.consistent_m2)
+                copyto!(wk.alpha_prev, wk.alpha)
+                @inbounds for j in eachindex(wk.T_prev)
+                    wk.T_prev[j] = exp(wk.yT[j])
+                end
+            end
             update_primitives_2d!(U, g, τ, model, wk; bc = bc)
             relax_dissipative_2d!(U, g, τ, Δused, model, wk)
         end
