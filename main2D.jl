@@ -379,7 +379,16 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
         # trace row carries eta_bar*(A/B * DlnT + 5/3 theta) with A/B ~ 7, so a
         # sign-flipped DlnT is a leading-order error, and the traceless rows carry
         # DlnT through `geo` as well.
-        if nsteps > 0 && (model.consistent_fm || model.consistent_m2)
+        # ⚠ `isfinite(...)` and NOT `nsteps > 0`. The history is valid whenever the
+        # work arrays carry it, which is the case on a JOIN -- `run_sim_2d!` called
+        # again on the same `work` with `reset_history = false`, as a snapshot walk
+        # does. Gating on `nsteps > 0` re-skipped the snapshot at EVERY segment
+        # boundary, so the answer depended on how many snapshots the caller took:
+        # measured, Pi_Q at the centre came out -3.6e-03, +1.5e-02 or exactly 0.0
+        # for the same physics at NSNAP = 2, 5, 13. The m2 block then also skipped
+        # its first substep after every join (it tests the same history), which is
+        # how a harness detail became a physics-looking sign flip.
+        if isfinite(wk.alpha_prev[1]) || nsteps > 0
             copyto!(wk.alpha_prev, wk.alpha)
             @inbounds for j in eachindex(wk.T_prev)
                 wk.T_prev[j] = exp(wk.yT[j])
