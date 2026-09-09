@@ -2910,3 +2910,76 @@ resolution. ⚠ SELF-convergence — Fluidum has no live 2-D second-moment solve
 *solve* comparison does not exist yet.
 
 **The ladder is 20/20 in ≈25 min** (2026-09-09), the fast tier 5/5 in 23 s.
+
+## 6ag. The MEDIUM viscous sector, cross-checked algebraically (2026-09-09)
+
+Everything the ladder does for the medium shear and bulk is a SOLVE: Bjorken (G0), Gubser
+(G1), viscous Gubser (G1v), sound attenuation (Gs), bulk against theory (§6n), and the
+Fluidum comparison's `1/N` convergence. Each is a statement about a solution. None of them
+puts the **rows** side by side with a reference, and that is the check that finds a wrong
+entry rather than a wrong answer — Fluidum's legacy 2-D matrix carried ten of them through a
+year of good-looking solutions.
+
+`Projects/FiVoFluidumComparison/gate_2p1d_viscous.jl` is that gate, and its referee
+(`ref_2p1d_viscous.jl`) is written from the tensor definitions and depends on neither code.
+For `src2d/`:
+
+| | worst over 160 randomised states |
+|---|---|
+| `ns_shear_target_2d`'s closed-form σ vs the covariant `∇^{⟨μ}u^{ν⟩}` | **1.0e-11** |
+| the shear + bulk ROWS vs the referee | `π^{yy}` 3.0e-12 · `π^{xy}` 1.1e-11 · `π^{xx}` 1.1e-12 · `Π` 9.1e-16 |
+| **vs Fluidum's independent matrix** | `π^{yy}` 5.0e-13 · `π^{xy}` 8.4e-13 · `Π` 7.8e-14 |
+| the LIVE `relax_dissipative_2d!` | **5.6e-7** at `Δ = 1e-7`, falling ×10.00 per decade in Δ |
+| the conserved state, both fluxes and `source_cell_2d!` vs `T^{μν}` | **1.9e-16** |
+| `δ_ππ`'s Bjorken fixed-point suppression, in closed form | 17–31 % over LP1's range |
+
+The second-to-last row is the counterpart of the gate's W7 on Fluidum's side. FiVo has no
+conservation *rows* to compare — its conservation is the divergence form by construction — so what
+is checkable is the flux table of §1: `prim_to_cons_2d!`, both directions of `flux_cell_2d!` and
+`source_cell_2d!` against `T^{μν}` written from its own definition. A transposed entry, a dropped
+`π` component or a sign there is a real defect that no solve-vs-solve comparison localises.
+
+The LIVE row is the one an RHS gate cannot give: it runs the real substep on a real grid and
+differences the state it returns, in two configurations (linear `u` + uniform `π` + advection
+off; uniform `u` + linear `π` + advection **on**, where the upwind difference of a linear
+field is exact). Both land on the backward-Euler truncation and nothing else. This is the
+same lesson §10–§11 of `COMPARISON_2P1D.md` paid for in the charm second moment — four
+defects lived under an algebraic gate reading 2.2e-16.
+
+**Nothing in `src2d/` failed.** The gate's two failures were in the harness, and both looked
+like solver defects: the referee not being told about `deltaShear_factor`, and a state built
+uniform in FiVo's dofs rather than the referee's.
+
+### 🔴 D16 — `deltaShear_factor` defaults to 4/3 here and 0.0 in the 1-D solver
+
+| | `deltaShear_factor` default |
+|---|---|
+| `main.jl` (1-D production) | **0.0** — plain Israel–Stewart |
+| `src2d/primitives2d.jl:138` | **4/3** — the DNMR `−δ_ππ π^{μν}θ` damping |
+| Fluidum, either chart | the coefficient does not exist |
+
+Measured in closed form (gate W5, 1.1e-12): the term shifts the rate by exactly
+`−δ_ππ θ π^{ij}/(τ_π u^τ)`. Fluidum's absence of it is established twice independently — its
+2-D matrix sits on plain IS to 1.2e-11 (gate W2), and its shipped **1-D** matrix is
+reproduced entry by entry at 1.78e-15 by a generator with no second-order coefficient at all
+(`bench_fluidum_2p1d_viscous.jl` G1).
+
+So the D10 guard's own warning — *"a 1-D↔2-D A/B at non-default settings silently compared
+different physics"* — describes something that is live at **default** settings, one line
+above it. And this solver's default is neither plain IS nor complete DNMR: `taupi_pi_factor`,
+`lambda_Pi_pi_factor` and `lambda_pi_Pi_factor` are all refused at non-default by D10, so it
+carries exactly one of DNMR's second-order terms.
+
+**What the setting costs, measured (gate W9).** On Bjorken the Navier–Stokes fixed point is
+divided by `(1 + δ_ππθ)`, `θ = 1/τ`, so with this solver's own `τ_π = (η/s)ħc/(T C_s)` the shear
+sits below the equation Fluidum integrates by **24.7 %** at `T = 0.40, τ = 1`, **30.5 %** at
+`T = 0.30, τ = 1`, 18.0 % at `T = 0.30, τ = 2`, 24.7 % at `T = 0.20, τ = 2` and 17.4 % at
+`T = 0.156, τ = 4`. 🔑 That 30.5 % is `transport_contract.jl`'s own "~30 %" — the July observation
+was real and correctly sized; only its attribution to Fluidum was wrong.
+
+⚠ **Not changed here**, and the reason is not caution alone. Flipping it moves every viscous
+number in this ladder and in `COMPARISON_2P1D.md`, and the same constant is asserted on the 1-D
+LP1 production path (`LP1_SHEAR_DELTAPI_FACTOR = 4/3`). More to the point: if the July measurement
+was real, `δ_ππ = 0` re-opens a ~30 % gap from some other cause and the two errors have been
+cancelling. Deciding that means re-running the 1-D comparison. Recorded as a decision to take, not
+taken. `COMPARISON_2P1D.md` §33.4 has the evidence.
