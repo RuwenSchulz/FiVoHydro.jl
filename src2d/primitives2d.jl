@@ -47,6 +47,27 @@ Base.@kwdef struct IdealDiffVisc2DModel{EOS,PR,SH,BU}
     enable_diff::Bool           = false
     diffusion_drive::Symbol     = :alpha      # :alpha | :n
     kappa_coeff::Float64        = 0.0         # D_s·T [GeV·fm]
+    # The charm mass the TRANSPORT coefficients use. It is the physical heavy-quark
+    # mass, and it is NOT the same object as the EoS's `m_hq` even though the two
+    # coincide in production (both 1.5 GeV).
+    #
+    # `m_hq` sets the DENSITY n(T, alpha); this one sets the Bessel moment ratios
+    # A/B and dln C/dln T that the second moment's trace row is built from, i.e. a
+    # property of the charm momentum distribution. Fluidum keeps them separate by
+    # construction -- its rows take `params.diffusion.mass` while its EoS is the
+    # hadron list -- and FiVo did not, reading `hq_mass(model.eos)` for both.
+    #
+    # 🔴 That coupling is invisible in production and bites the moment anyone
+    # retunes `m_hq` as a normalisation knob: the comparison harness fits
+    # (m_hq, g_hq) = (2.315, 200.34) to Fluidum's charmed-hadron density, and the
+    # 2.315 then leaked into A/B and dlnC. Measured at a real cell it FLIPPED THE
+    # SIGN of the trace drive -- sB = +8.03e-03 at mq = 2.315 against -9.23e-02 at
+    # the physical 1.5 -- and left Pi_Q a factor ~19 short of a reference
+    # integration of the same row.
+    #
+    # Default 0.0 means "use the EoS mass", which reproduces every shipped run
+    # bit-for-bit; set it explicitly to decouple the two.
+    transport_mass::Float64     = 0.0
     tauN_coeff::Float64         = 1.0
     deltaN_factor::Float64      = 0.0
     diff_dt_coeff::Float64      = 0.0

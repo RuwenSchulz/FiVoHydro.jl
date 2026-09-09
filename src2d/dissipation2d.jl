@@ -503,6 +503,9 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
                     pQxx = phys_from_stored(U[L.iPQxx,i]); pQxy = phys_from_stored(U[L.iPQxy,i])
                     pQyy = phys_from_stored(U[L.iPQyy,i]); pQeta = phys_from_stored(U[L.iPQeta,i])
                     PiQv = phys_from_stored(U[L.iPiQ,i])
+                    # the TRANSPORT charm mass -- see `transport_mass` in primitives2d.jl
+                    mq_transport = model.transport_mass > 0.0 ? model.transport_mass :
+                                                                hq_mass(model.eos)
                     τMq = tauM_charm_2d(T, τn)
                     # 🔴 2026-09-09. SKIP the update until the D_tau history exists.
                     # On the first substep `alpha_prev` and `T_prev` are NaN-seeded,
@@ -562,7 +565,7 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
                             dta, dxa, dya, θν, aνx, aνy, dtnx, dtny,
                             dxnx, dxny, dynx, dyny,
                             θ, ax, ay, dtux2, dtuy2, dxux, dxuy, dyux, dyuy,
-                            n, τn, Ds2, h2, hp2, τMq, ηM_charm_2d(T, τn), hq_mass(model.eos))
+                            n, τn, Ds2, h2, hp2, τMq, ηM_charm_2d(T, τn), mq_transport)
                         # ── backward Euler on  tau_M u^tau d_tau X = -S(X) ──────────
                         # 🔴 2026-09-09. This block used to read
                         #     X_new = (A2*X_old + tau_M u^tau * s) / (A2 + 1)
@@ -613,7 +616,7 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
                             dta, dxa, dya, θν, aνx, aνy, dtnx, dtny,
                             dxnx, dxny, dynx, dyny,
                             θ, ax, ay, dtux2, dtuy2, dxux, dxuy, dyux, dyuy,
-                            n, τn, Ds2, h2, hp2, τMq, ηM_charm_2d(T, τn), hq_mass(model.eos))
+                            n, τn, Ds2, h2, hp2, τMq, ηM_charm_2d(T, τn), mq_transport)
                         # d(rate)/d(field) = -c/(tau_M u^tau)  =>  c = -slope*tau_M*u^tau
                         cxx = -(m2at(pQxx+δp, pQxy, pQyy, PiQv)[1] - sxx)/δp * τMq*uτ
                         cxy = -(m2at(pQxx, pQxy+δp, pQyy, PiQv)[2] - sxy)/δp * τMq*uτ
