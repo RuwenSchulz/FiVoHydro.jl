@@ -567,8 +567,43 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
                         # measured: pi_Q^xx amplitude ratio 0.57 and Pi_Q 0.076 against
                         # Fluidum, growing from cos = 1.00000 four steps out of the IC.
                         # Recover R by adding the field term back, then solve exactly.
+                        # 🔴 2026-09-09 (second pass). The affine coefficient is NOT
+                        # (1 + geo). Every channel is affine in its OWN field with
+                        # coefficient (1 + geo) from the explicit `X + geo*X` terms
+                        # PLUS a contribution from the class-(iii) coupling
+                        # pi^{(i}_lambda sigma^{j)lambda}, which is also linear in pi.
+                        # Measured at a representative state: the true coefficient is
+                        # 1.6474 against (1 + geo) = 1.4706 -- a 12% error in the
+                        # relaxation rate, which is exactly the size of the residual
+                        # that survived normalising pi_Q^xx by each code's own
+                        # eta_bar (0.733). Both codes' RATES agree to all digits
+                        # (d(rate)/d(pxx) = -6.243942 in each), so this was purely an
+                        # error in FiVo's implicit SOLVE, invisible to every RHS gate.
+                        #
+                        # Rather than re-derive the coefficient analytically, MEASURE
+                        # it: the row is exactly affine in its own field (the system
+                        # is quasi-linear), so one extra source evaluation at a
+                        # perturbed field gives the slope to round-off, and the
+                        # implicit step is then exact rather than approximate.
                         A2   = safe_div(τMq*uτ, Δ)
-                        den2 = max(A2 + 1 + geo2, 0.5*(A2 + 1))   # as the shear block guards
+                        # ONE perturbation PER CHANNEL: perturbing all four at once
+                        # would fold the cross-couplings (pi^xx feeds the trace through
+                        # pi:sigma) into what is meant to be the diagonal coefficient.
+                        δp = 1e-7 * max(one(pQxx), abs(pQxx), abs(pQxy),
+                                        abs(pQyy), abs(PiQv))
+                        m2at(a, b, c, e) = consistent_m2_source_2d(
+                            ux, uy, uτ, τ, T, dxT2, dyT2, dtT2,
+                            nux, nuy, a, b, c, pQeta, e,
+                            dta, dxa, dya, θν, aνx, aνy, dtnx, dtny,
+                            dxnx, dxny, dynx, dyny,
+                            θ, ax, ay, dtux2, dtuy2, dxux, dxuy, dyux, dyuy,
+                            n, τn, Ds2, h2, hp2, τMq, ηM_charm_2d(T, τn), hq_mass(model.eos))
+                        # d(rate)/d(field) = -c/(tau_M u^tau)  =>  c = -slope*tau_M*u^tau
+                        cxx = -(m2at(pQxx+δp, pQxy, pQyy, PiQv)[1] - sxx)/δp * τMq*uτ
+                        cxy = -(m2at(pQxx, pQxy+δp, pQyy, PiQv)[2] - sxy)/δp * τMq*uτ
+                        cyy = -(m2at(pQxx, pQxy, pQyy+δp, PiQv)[3] - syy)/δp * τMq*uτ
+                        cB  = -(m2at(pQxx, pQxy, pQyy, PiQv+δp)[4] - sB )/δp * τMq*uτ
+                        dn(c) = max(A2 + c, 0.5*(A2 + 1))   # as the shear block guards
                         # tau_M u^i d_i X: the transverse half of tau_M u^mu d_mu X.
                         # These fields carry no flux entries, so without this the
                         # second moment was advected by NOTHING -- see the note on
@@ -578,14 +613,14 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
                         amxy = ram ? -τMq*upw(L.iPQxy, i, ux, uy) : 0.0
                         amyy = ram ? -τMq*upw(L.iPQyy, i, ux, uy) : 0.0
                         amB  = ram ? -τMq*upw(L.iPiQ,  i, ux, uy) : 0.0
-                        Rxx  = -τMq*uτ*sxx - (1 + geo2)*pQxx - amxx
-                        Rxy  = -τMq*uτ*sxy - (1 + geo2)*pQxy - amxy
-                        Ryy  = -τMq*uτ*syy - (1 + geo2)*pQyy - amyy
-                        RB   = -τMq*uτ*sB  - (1 + geo2)*PiQv  - amB
-                        pQxx = (A2*pQxx - Rxx) / den2
-                        pQxy = (A2*pQxy - Rxy) / den2
-                        pQyy = (A2*pQyy - Ryy) / den2
-                        PiQv = (A2*PiQv - RB)  / den2
+                        Rxx  = -τMq*uτ*sxx - cxx*pQxx - amxx
+                        Rxy  = -τMq*uτ*sxy - cxy*pQxy - amxy
+                        Ryy  = -τMq*uτ*syy - cyy*pQyy - amyy
+                        RB   = -τMq*uτ*sB  - cB *PiQv  - amB
+                        pQxx = (A2*pQxx - Rxx) / dn(cxx)
+                        pQxy = (A2*pQxy - Rxy) / dn(cxy)
+                        pQyy = (A2*pQyy - Ryy) / dn(cyy)
+                        PiQv = (A2*PiQv - RB)  / dn(cB)
                         # tracelessness: correct pQeta alone, as the medium shear does
                         pQeta, _ = project_shear_traceless_2d(ux, uy, uτ, pQxx, pQxy, pQyy, pQeta)
                         U[L.iPQxx,i]  = stored_from_phys(pQxx)
