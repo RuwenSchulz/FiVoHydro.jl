@@ -371,6 +371,21 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
         Δ = min(Δ, τfinal - τ)
         Δ <= 0 && break
 
+        # 🔴 2026-09-09 (second pass). The history snapshot belongs HERE, before the
+        # state is advanced. Taken after `tau += Delta` (where it sat until now) the
+        # work arrays hold primitives recovered at the OLD tau from a state the flux
+        # update has ALREADY moved, so `T - T_prev` came out with the WRONG SIGN:
+        # measured +1.57e-05 on a cooling medium whose true d_tau T is -0.159. The
+        # trace row carries eta_bar*(A/B * DlnT + 5/3 theta) with A/B ~ 7, so a
+        # sign-flipped DlnT is a leading-order error, and the traceless rows carry
+        # DlnT through `geo` as well.
+        if nsteps > 0 && (model.consistent_fm || model.consistent_m2)
+            copyto!(wk.alpha_prev, wk.alpha)
+            @inbounds for j in eachindex(wk.T_prev)
+                wk.T_prev[j] = exp(wk.yT[j])
+            end
+        end
+
         ok, Δused = step(U, g, τ, Δ, model, wk; bc = bc)
         if !ok
             @warn "2-D step failed after dt halving" τ = τ Δ = Δused
@@ -402,12 +417,6 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
             # take these derivatives as INPUTS. u^i and nu^i are NOT captured here:
             # nu is written by the relaxation itself, so its history belongs at the
             # end of it, where it already is.
-            if nsteps > 0 && (model.consistent_fm || model.consistent_m2)
-                copyto!(wk.alpha_prev, wk.alpha)
-                @inbounds for j in eachindex(wk.T_prev)
-                    wk.T_prev[j] = exp(wk.yT[j])
-                end
-            end
             update_primitives_2d!(U, g, τ, model, wk; bc = bc)
             relax_dissipative_2d!(U, g, τ, Δused, model, wk)
         end
