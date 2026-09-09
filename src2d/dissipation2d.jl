@@ -519,7 +519,18 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
                         aνx = uτ*dtnx + ux*dxnx + uy*dynx
                         aνy = uτ*dtny + ux*dxny + uy*dyny
                         nut2 = nu_tau_2d(ux, uy, uτ, nux, nuy)
-                        θν  = (ux*dtnx + uy*dtny + nux*dtux2 + nuy*dtuy2)*safe_inv(uτ) +
+                        # theta_nu = d_mu nu^mu. The tau-row is d_tau of
+                        # nu^tau = (u.nu)/u^tau, and that is a QUOTIENT: the
+                        # denominator carries u^tau(tau) too. FiVo dropped the
+                        # second half of the quotient rule here until 2026-09-09 --
+                        # the -nu^tau (u^x dtu^x + u^y dtu^y)/(u^tau)^2 below --
+                        # which Fluidum's `thnu` has always had. It is invisible to
+                        # the RHS gates, which take theta_nu as an INPUT rather than
+                        # building it, and it hits the TRACE channel hardest because
+                        # zeta_Q*theta_nu is that row's dominant drive: it left Pi_Q
+                        # a factor ~10 low against Fluidum on the physical IC.
+                        θν  = (ux*dtnx + uy*dtny + nux*dtux2 + nuy*dtuy2)*safe_inv(uτ) -
+                              nut2*(ux*dtux2 + uy*dtuy2)*safe_inv(uτ*uτ) +
                               dxnx + dyny + nut2*safe_inv(τ)
                         # T gradients, computed here so the m2 sector does not
                         # depend on the consistent_fm block having run.
@@ -529,18 +540,52 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
                         dyT2  = (exp(work.yT[i+1]) - exp(work.yT[i-1]))*0.5*invdy
                         h2, hp2 = hq_h_hprime_2d(T, model.eos)
                         Ds2 = safe_div(model.kappa_coeff, T) / fmGeV
-                        sxx, sxy, syy, sB = consistent_m2_source_2d(
+                        sxx, sxy, syy, sB, geo2 = consistent_m2_source_2d(
                             ux, uy, uτ, τ, T, dxT2, dyT2, dtT2,
                             nux, nuy, pQxx, pQxy, pQyy, pQeta, PiQv,
                             dta, dxa, dya, θν, aνx, aνy, dtnx, dtny,
                             dxnx, dxny, dynx, dyny,
                             θ, ax, ay, dtux2, dtuy2, dxux, dxuy, dyux, dyuy,
                             n, τn, Ds2, h2, hp2, τMq, ηM_charm_2d(T, τn), hq_mass(model.eos))
-                        A2 = safe_div(τMq*uτ, Δ)
-                        pQxx = (A2*pQxx + τMq*uτ*sxx) / (A2 + 1)
-                        pQxy = (A2*pQxy + τMq*uτ*sxy) / (A2 + 1)
-                        pQyy = (A2*pQyy + τMq*uτ*syy) / (A2 + 1)
-                        PiQv = (A2*PiQv + τMq*uτ*sB)  / (A2 + 1)
+                        # ── backward Euler on  tau_M u^tau d_tau X = -S(X) ──────────
+                        # 🔴 2026-09-09. This block used to read
+                        #     X_new = (A2*X_old + tau_M u^tau * s) / (A2 + 1)
+                        # and that DOUBLE-COUNTS the field. `consistent_m2_source_2d`
+                        # returns s = -S/(tau_M u^tau), and S is AFFINE IN X with the
+                        # field appearing bare at the front of every channel:
+                        #     S = (1 + geo)*X + R,   geo = tau_M*(5/3 theta + DlnC)
+                        # (`sxx = pxx + ...`, `sB = PiQ + ...`). So tau_M u^tau * s
+                        # = -(1+geo)*X_old - R, and the old numerator was
+                        #     A2*X_old - (1+geo)*X_old - R
+                        # i.e. an extra -(1+geo)*X_old against the exact implicit solve
+                        #     X_new = (A2*X_old - R) / (A2 + 1 + geo).
+                        # The error VANISHES as A2 -> infinity and is O(1) at
+                        # production steps (A2 ~ 5 gives a factor 0.67), so it survived
+                        # every RHS gate -- those evaluate the SOURCE at a state and
+                        # never step it -- and it does not go away under refinement,
+                        # which is exactly what the FiVo-vs-Fluidum solve comparison
+                        # measured: pi_Q^xx amplitude ratio 0.57 and Pi_Q 0.076 against
+                        # Fluidum, growing from cos = 1.00000 four steps out of the IC.
+                        # Recover R by adding the field term back, then solve exactly.
+                        A2   = safe_div(τMq*uτ, Δ)
+                        den2 = max(A2 + 1 + geo2, 0.5*(A2 + 1))   # as the shear block guards
+                        # tau_M u^i d_i X: the transverse half of tau_M u^mu d_mu X.
+                        # These fields carry no flux entries, so without this the
+                        # second moment was advected by NOTHING -- see the note on
+                        # `relax_advect_m2` in primitives2d.jl.
+                        ram  = model.relax_advect_m2
+                        amxx = ram ? -τMq*upw(L.iPQxx, i, ux, uy) : 0.0
+                        amxy = ram ? -τMq*upw(L.iPQxy, i, ux, uy) : 0.0
+                        amyy = ram ? -τMq*upw(L.iPQyy, i, ux, uy) : 0.0
+                        amB  = ram ? -τMq*upw(L.iPiQ,  i, ux, uy) : 0.0
+                        Rxx  = -τMq*uτ*sxx - (1 + geo2)*pQxx - amxx
+                        Rxy  = -τMq*uτ*sxy - (1 + geo2)*pQxy - amxy
+                        Ryy  = -τMq*uτ*syy - (1 + geo2)*pQyy - amyy
+                        RB   = -τMq*uτ*sB  - (1 + geo2)*PiQv  - amB
+                        pQxx = (A2*pQxx - Rxx) / den2
+                        pQxy = (A2*pQxy - Rxy) / den2
+                        pQyy = (A2*pQyy - Ryy) / den2
+                        PiQv = (A2*PiQv - RB)  / den2
                         # tracelessness: correct pQeta alone, as the medium shear does
                         pQeta, _ = project_shear_traceless_2d(ux, uy, uτ, pQxx, pQxy, pQyy, pQeta)
                         U[L.iPQxx,i]  = stored_from_phys(pQxx)

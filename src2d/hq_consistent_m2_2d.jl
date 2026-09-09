@@ -207,7 +207,7 @@ wrong by 2.69x in the φ channel.
 end
 
 """
-    consistent_m2_source_2d(...) -> (dpxx, dpxy, dpyy, dPiQ)
+    consistent_m2_source_2d(...) -> (dpxx, dpxy, dpyy, dPiQ, geo)
 
 ∂_τ of the transverse second-moment block and the trace, under the CONSISTENT
 closure. `pQeta` is NOT returned: it is redundant and is restored from the
@@ -317,6 +317,12 @@ gate can hand both codes identical data.
          cf.ηbar*Dα
 
     # ── solve τ_M u^τ ∂_τ X + src = 0 ─────────────────────────────────────────
+    # `geo` is returned as a FIFTH value because the caller's implicit update needs
+    # it: every channel above is AFFINE in its own field with coefficient (1 + geo)
+    # (`sxx = pxx + ... + geo*pxx`), so the exact backward-Euler solve is
+    #     X_new = (A X_old - R)/(A + 1 + geo),   R = -τ_M u^τ s - (1+geo) X_old.
+    # Recomputing geo at the call site would duplicate DlnT and DlnC and let the two
+    # drift apart; handing it back keeps ONE definition. See dissipation2d.jl.
     den = τM * uτ
-    return (-sxx/den, -sxy/den, -syy/den, -sB/den)
+    return (-sxx/den, -sxy/den, -syy/den, -sB/den, geo)
 end

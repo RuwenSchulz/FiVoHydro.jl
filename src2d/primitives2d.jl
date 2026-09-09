@@ -130,6 +130,13 @@ Base.@kwdef struct IdealDiffVisc2DModel{EOS,PR,SH,BU}
     bulk_dt_coeff::Float64      = 0.0
     advect_Pi::Bool             = false
     relax_advect_Pi::Bool       = true
+    # 🔴 2026-09-09. Transverse advection of the CHARM second moment inside its
+    # relaxation, the same device `relax_advect_nu/pi/Pi` provide for every other
+    # dissipative field. The equation is tau_M u^mu d_mu pi_Q + ..., and the m2
+    # block evolved only the u^tau piece: the fields carry no flux entries either,
+    # so tau_M u^i d_i pi_Q was missing outright. Fluidum's 8x8 has always had it
+    # (Ax[k,k] = tau_M u^x, Ay[k,k] = tau_M u^y at HQ_2p1d_BG_m2.jl:371).
+    relax_advect_m2::Bool       = true
     Pi_clip_factor::Float64     = -1.0
 
     # ---- domain radius ----
