@@ -3047,8 +3047,12 @@ Fixed in `consistent_m2_source_2d` (switch `terms.m2_projector`, on); Gm1 now di
 projection along the trajectory and matches the states. Result: **4.0e-16** with the term,
 **5.7e-3** without it (control run). At Gm1's four states the term is 0.02–0.57 % of the `p_l` rate.
 `terms = (m2_projector = false,)` reproduces the old rows bit for bit (checked on a full solve).
-Fluidum's `HQ_2p1d_BG_m2.jl` agreed with the old rows at 2.2e-16 (N3) and so lacks the term too;
-not changed there.
+Fluidum's `HQ_2p1d_BG_m2.jl` agreed with the old rows at 2.2e-16 (N3) and so lacked the term too —
+**fixed there on 2026-09-11** (`hq2d_proj_corr`, `projector = true`), together with the vorticity
+coupling of §6ah.3. Both derived symbolically first (`derive_hq_m2_2p1d.wls` G6/G7, 22/22), and the
+two codes now agree at ~1e-16 with either term on, with both on, and with neither
+(`gate_2p1d_m2_newterms.jl` M1-M3, on genuinely 2-D states). Fluidum's N1 had the SAME frozen-map
+defect as Gm1 and is corrected the same way: 5.7e-3 → 4.0e-16. Log: `COMPARISON_2P1D.md` §38.
 
 ### 6ah.3 The vorticity coupling `2τ_M π_Q^{λ⟨μ}ω_λ^{ν⟩}` was absent from both 2-D codes
 
@@ -3198,3 +3202,36 @@ Also: `figures/anim/` (5 gifs, 5.9 MB) is **gitignored** — regenerable, and th
 `animate_fluctuating_fields.jl`'s two rules: colour scale FIXED across frames, and taken from cells
 above freeze-out (the vacuum tail's |u| is several times the fireball's).
 🪤 The Julia soft-scope trap bit once more, in 09's convergence ladder (`prev` in a top-level `for`).
+
+## 6ak. One term interface for every solver; the medium's vorticity and DNMR couplings (2026-09-11)
+
+Asked to make FiVo "perfect" in 1+1D and 2+1D — above all "a nice interface that turns off terms like
+vorticity, the inertia terms (assume homogeneous fluid)". The 2-D side already had `Terms2D` (§6ah.4); the
+1-D solvers had nothing. Record for the 1-D half: `EQUATIONS1D.md` §8, `README.md` (rewritten as the front door).
+
+**The switches became one register for all three solvers** (`src/terms.jl`; `Terms2D` is now an alias of
+`Terms`). New on top of the seventeen: presets `:default`, `:full`, `:homogeneous`, `:none`; `without(...)` by
+physical ingredient (`:acceleration` = the inertial terms, `:vorticity`, `:shear`, `:temperature_gradient`, …);
+a NamedTuple form `(preset = …, without = …, with = …, name = Bool)`. The sector rule sharpened: a term NAMED in a
+disabled sector is refused (as before); a change coming from a preset or ingredient there is inert and reset.
+`:homogeneous` is the reduction to a homogeneous medium at rest, and with `consistent_fm = true` it reproduces
+`consistent_fm = false` **bit for bit** (Gt7) — the shipped row is exactly that reduction.
+
+**The medium's vorticity coupling** `2τ_π π^{λ⟨i}ω_λ^{j⟩}` (`terms.shear_vorticity`, off by default): the same
+`vorticity_coupling_2d` as the charm's, with τ_π — DNMR's `+2τ_π π_λ^⟨μ ω^ν⟩λ` in this metric, a kinematic term
+with a fixed coefficient. Gt8: inert on a round fireball up to the O(h²) stencil vorticity (5e-6), 795× that on a
+swirling one, and it only rotates π (π_{μν}X^{μν} = 0 to 5e-15). Fluidum does not carry it.
+
+**The medium's DNMR couplings are wired** (τ_ππ, λ_πΠ, δ_ΠΠ, λ_Ππ were refused by `_UNWIRED_KNOBS_2D`): the
+1-D solver carried them with two wrong signs and a missing trace (fixed the same day, EQUATIONS1D.md §8), so they
+went in on both sides at once, with the 0+1D DNMR ODEs as the referee. π:σ and π^{λ⟨i}σ^{j⟩}_λ come from
+`pi_sigma_contractions_2d`, factored out of the charm second moment with the arithmetic unchanged (a 2-D run with
+every sector and both closures is bit-identical to the previous commit). **Gate Gd** (`test_dnmr2d.jl`, full tier):
+Richardson-extrapolated errors ≤ 3e-4, wrong-sign referees miss by 5.5e-3 – 1.7, 2-D = 1-D to 1e-15 on the λ/δ_ΠΠ
+cases, the contractions = brute-force index algebra to 3e-15.
+
+**Against the 1-D solver.** The 1-D bulk solver's ∂_τu^r was ~4 % of its value until today (EQUATIONS1D.md §8) —
+the 2-D solver never had that defect (`kinematics_2d` stores its history at the END of the relaxation). The full
+ladder (21/21, before Gd was added) passed against the FIXED 1-D solver, G4 and G7 included. New cross-solver gate
+X1 (`test/test_diffusion_mode.jl`, in the 1-D ladder) runs this solver, the 1-D bulk solver and the 1-D IS2 solver
+against one closed-form diffusion-mode referee in four term configurations.

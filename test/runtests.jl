@@ -294,8 +294,13 @@ let JLBIN = joinpath(Sys.BINDIR, Base.julia_exename()),
 
     regression = ["test_is2_drive.jl", "test_density_frame_flux.jl", "test_bdnk_causal.jl",
                   "test_bdnk_frame_coeffs.jl",   # BDNK general-frame σ_T/σ_a; needs u^r ≠ 0 AND ∂_rT ≠ 0
-                  "test_is2_causality.jl", "test_m1_gates.jl"]   # M1 validation ladder (9 gates; G5 skips if the LP1 bundle is absent)
-    long && push!(regression, "test_is2_stability.jl")   # heavier fresh IS2 solve
+                  "test_is2_causality.jl", "test_m1_gates.jl",   # M1 validation ladder (9 gates; G5 skips if the LP1 bundle is absent)
+                  # the 1+1D analytic ladder's fast tier (test/run1d_gates.jl), 2026-09-11:
+                  "test_terms1d.jl",            # T  — the shared term switches in the 1-D solvers (~5 s)
+                  "test_gubser_viscous1d.jl"]   # A4 — viscous Gubser vs its semi-analytic ODE (~10 s)
+    long && append!(regression, ["test_is2_stability.jl",   # heavier fresh IS2 solve
+                                 "test_bjorken1d.jl",       # A1/A2 — Bjorken ideal + the full DNMR set (~3 min)
+                                 "test_diffusion_mode.jl"]) # X1 — the diffusion mode, three solvers (~1.5 min)
 
     @testset "charm-solver regression (subprocess): $script" for script in regression
         path = joinpath(@__DIR__, script)

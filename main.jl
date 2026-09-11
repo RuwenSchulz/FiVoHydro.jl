@@ -28,6 +28,7 @@ include(joinpath(_SRC, "utils.jl"))
 include(joinpath(_SRC, "grid.jl"))
 include(joinpath(_SRC, "eos.jl"))
 include(joinpath(_SRC, "logging_setup.jl"))
+include(joinpath(_SRC, "terms.jl"))                     # Terms: the shared term register
 include(joinpath(_SRC, "primitives.jl"))
 include(joinpath(_SRC, "state_layout.jl"))
 include(joinpath(_SRC, "constants.jl"))
@@ -40,6 +41,7 @@ include(joinpath(_SRC, "work.jl"))
 include(joinpath(_SRC, "ic_diagnostics.jl"))
 include(joinpath(_SRC, "shear_tensor.jl"))
 include(joinpath(_SRC, "relaxation_laws.jl"))
+include(joinpath(_SRC, "hq_consistent_firstmoment.jl"))  # the consistent_fm sources (shared with IS2)
 include(joinpath(_SRC, "dissipation.jl"))
 include(joinpath(_SRC, "io.jl"))
 include(joinpath(_SRC, "mood.jl"))
@@ -564,6 +566,10 @@ function run_sim_ideal_diff_visc(; outdir::String,
                                 relax_advect_pi::Bool=true,
                                 # postprocessing
                                 postprocess::Bool=true,
+                                # the consistent first moment and the term switches (2026-09-11;
+                                # src/terms.jl, EQUATIONS1D.md §4) — defaults = the shipped model
+                                consistent_fm::Bool=false,
+                                terms=:default,
                                 # EOS choice
                                 eos = ConformalHQEOS(g_eff=40.0, m_hq=1.5, g_hq=6.0))
 
@@ -580,6 +586,7 @@ function run_sim_ideal_diff_visc(; outdir::String,
 
     shear_model = QGPViscosity(eta_over_s, tauShear_coeff)
     bulk_model  = (zeta_over_s == 0.0) ? ZeroBulkViscosity() : SimpleBulkViscosity(zeta_over_s, tauPi_coeff)
+    warn_if_acausal_shear(; enable_shear, eta_over_s, tauShear_coeff, solver = "run_sim_ideal_diff_visc")
 
 
     _check_transport_flags!(;
@@ -591,6 +598,16 @@ function run_sim_ideal_diff_visc(; outdir::String,
     # Convention: the diffusion input is the *dimensionless* constant DsT.
     # The code then uses κ(T,μ,n) = (DsT/T) * n (up to unit conversion).
     DsT_val = isnothing(kappa_coeff) ? DsT : kappa_coeff
+
+    if consistent_fm
+        (enable_diff && charge_mode === :mis && diffusion_drive === :alpha && tauN_coeff == 1.0) ||
+            error("run_sim_ideal_diff_visc: `consistent_fm = true` needs enable_diff, charge_mode = :mis, " *
+                  "diffusion_drive = :alpha and tauN_coeff = 1 (see build_model_1d for why)")
+    end
+    son = s -> s === :enable_diff ? enable_diff : s === :consistent_fm ? consistent_fm :
+               s === :enable_shear ? enable_shear : false
+    terms_resolved = resolve_terms(terms; sector_on = son)
+    check_terms(terms_resolved, son; solver = "run_sim_ideal_diff_visc")
 
     model  = IdealDiffViscModel(eos, layout, IdealPrimRec(),
         # charge diffusion
@@ -609,7 +626,9 @@ function run_sim_ideal_diff_visc(; outdir::String,
         # NEW
         relax_advect_Pi, relax_advect_pi,
         # charge-sector closure (:mis | :density_frame)
-        charge_mode
+        charge_mode,
+        # the consistent first moment and the term switches
+        consistent_fm, terms_resolved
     )
 
     U = zeros(length(layout.names), grid.Nr + 2*grid.nghost)
@@ -781,8 +800,18 @@ function run_sim_ideal_diff_visc(; outdir::String,
         )
         @info "Wrote hydro currents JLD2" currents_path splines_path
     end
-    return nothing
+    # The final state, for library use (callers that ignore the return are unaffected;
+    # until 2026-09-11 this returned `nothing`). `fields_1d(res.grid, res.U, res.model;
+    # τ = res.τ, work = res.work)` gives every field.
+    return (; τ, nsteps = it, grid, U, model, work, outdir)
 end
+
+# ------------------------------------------------------------
+# The library interface (build_model_1d, set_cell!, run_sim_1d!, fields_1d,
+# show_equations) — the same names and defaults as the 2+1D solver's.
+# ------------------------------------------------------------
+include(joinpath(_SRC, "api1d.jl"))
+include(joinpath(_SRC, "fields_io.jl"))                 # save_fields / load_fields
 
 # ------------------------------------------------------------
 # Main

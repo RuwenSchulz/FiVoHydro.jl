@@ -83,6 +83,11 @@
 # be switched separately, which is what makes the four-way attribution possible.
 # =============================================================================
 
+# The per-term switches (`Terms`) live in the shared register. Every solver
+# includes it first; the guard lets a script include this file on its own
+# (test_consistent_*2d.jl, plot_operator_closure_ratio.jl do).
+@isdefined(Terms) || include(joinpath(@__DIR__, "terms.jl"))
+
 """
     hq_m2_coeffs(T, n, τn, Ds, h, hp, m) -> NamedTuple
 
@@ -137,7 +142,8 @@ halves of one system on different clocks.
                                       drp::NTuple{3,Float64},
                                       n::Float64, τn::Float64, Ds::Float64,
                                       h::Float64, hp::Float64,
-                                      τM::Float64, ηM::Float64, m::Float64)
+                                      τM::Float64, ηM::Float64, m::Float64;
+                                      terms::Terms = Terms())
     Tm = max(T, T_MIN)
     uτ = sqrt(1.0 + ur^2)
     (τM > 0.0 && r > 0.0) || return (0.0, 0.0, 0.0)
@@ -189,20 +195,50 @@ halves of one system on different clocks.
     geo = τM * ((5.0 / 3.0) * θ + DlnC)
     rank1 = 2 * cf.λa * a_l * ν_l + (Ds / Tm) * ν_l * DlTh
 
-    # ── the LHS sources (Fluidum's src[1..3]) ─────────────────────────────────
-    src_l = p_l + 2 * ηQ * σν_l +
-            geo * p_l + 2 * τM * (p_l * s_l - πσ / 3) + 2 * τM * PiQ * s_l +
-            2 * cf.ηbar * s_l + rank1 * (2.0 / 3.0)
-    src_φ = p_φ + 2 * ηQ * σν_φ +
-            geo * p_φ + 2 * τM * (p_φ * s_φ - πσ / 3) + 2 * τM * PiQ * s_φ +
-            2 * cf.ηbar * s_φ + rank1 * (-1.0 / 3.0)
-    src_B = PiQ + ζQ * θν +
-            geo * PiQ + (2.0 / 3.0) * τM * πσ +
-            cf.ηbar * (cf.ABr * DlnT + (5.0 / 3.0) * θ) +
-            (Ds * cf.Aco / (3 * Tm)) * aν + (5.0 / 6.0) * (Ds / Tm) * ν_l * DlTh
+    t = terms
+    if t.m2_nu_gradient && t.m2_bg_gradu && t.m2_bg_DlnT && t.m2_bg_Dalpha && t.m2_expansion &&
+       t.m2_pi_sigma && t.m2_PiQ_sigma && t.m2_accel_nu && t.m2_nu_gradTh
+        # ALL ON — the rows exactly as they stood before the switches (bit-identical).
+        # ── the LHS sources (Fluidum's src[1..3]) ─────────────────────────────
+        src_l = p_l + 2 * ηQ * σν_l +
+                geo * p_l + 2 * τM * (p_l * s_l - πσ / 3) + 2 * τM * PiQ * s_l +
+                2 * cf.ηbar * s_l + rank1 * (2.0 / 3.0)
+        src_φ = p_φ + 2 * ηQ * σν_φ +
+                geo * p_φ + 2 * τM * (p_φ * s_φ - πσ / 3) + 2 * τM * PiQ * s_φ +
+                2 * cf.ηbar * s_φ + rank1 * (-1.0 / 3.0)
+        src_B = PiQ + ζQ * θν +
+                geo * PiQ + (2.0 / 3.0) * τM * πσ +
+                cf.ηbar * (cf.ABr * DlnT + (5.0 / 3.0) * θ) +
+                (Ds * cf.Aco / (3 * Tm)) * aν + (5.0 / 6.0) * (Ds / Tm) * ν_l * DlTh
 
-    # ── the Dα entry of the trace row (Fluidum's at3[3,1] / ax3[3,1]) ─────────
-    src_B += cf.ηbar * (uτ * dtα + ur * drα)
+        # ── the Dα entry of the trace row (Fluidum's at3[3,1] / ax3[3,1]) ─────
+        src_B += cf.ηbar * (uτ * dtα + ur * drα)
+    else
+        # SWITCHED — one `Terms` field per term (src/terms.jl), the names of the 2-D
+        # `consistent_m2_source_2d`. `m2_vorticity` and `m2_projector` have no
+        # counterpart here: both vanish identically in the transported triad
+        # (l, φ̂, η̂) these channels are written in (see this file's header and
+        # src/terms.jl, "RADIAL SYMMETRY"). Gate test_terms1d.jl T2: the pieces sum
+        # to the all-on value.
+        g  = t.m2_expansion ? geo : 0.0
+        r1 = (t.m2_accel_nu  ? 2 * cf.λa * a_l * ν_l : 0.0) +
+             (t.m2_nu_gradTh ? (Ds / Tm) * ν_l * DlTh : 0.0)
+        src_l = p_l + (t.m2_nu_gradient ? 2 * ηQ * σν_l : 0.0) +
+                g * p_l + (t.m2_pi_sigma ? 2 * τM * (p_l * s_l - πσ / 3) : 0.0) +
+                (t.m2_PiQ_sigma ? 2 * τM * PiQ * s_l : 0.0) +
+                (t.m2_bg_gradu ? 2 * cf.ηbar * s_l : 0.0) + r1 * (2.0 / 3.0)
+        src_φ = p_φ + (t.m2_nu_gradient ? 2 * ηQ * σν_φ : 0.0) +
+                g * p_φ + (t.m2_pi_sigma ? 2 * τM * (p_φ * s_φ - πσ / 3) : 0.0) +
+                (t.m2_PiQ_sigma ? 2 * τM * PiQ * s_φ : 0.0) +
+                (t.m2_bg_gradu ? 2 * cf.ηbar * s_φ : 0.0) + r1 * (-1.0 / 3.0)
+        src_B = PiQ + (t.m2_nu_gradient ? ζQ * θν : 0.0) +
+                g * PiQ + (t.m2_pi_sigma ? (2.0 / 3.0) * τM * πσ : 0.0) +
+                cf.ηbar * ((t.m2_bg_DlnT ? cf.ABr * DlnT : 0.0) +
+                           (t.m2_bg_gradu ? (5.0 / 3.0) * θ : 0.0)) +
+                (t.m2_accel_nu  ? (Ds * cf.Aco / (3 * Tm)) * aν : 0.0) +
+                (t.m2_nu_gradTh ? (5.0 / 6.0) * (Ds / Tm) * ν_l * DlTh : 0.0)
+        src_B += t.m2_bg_Dalpha ? cf.ηbar * (uτ * dtα + ur * drα) : 0.0
+    end
 
     # ── solve At ∂_τp + Ax ∂_rp + src = 0 for ∂_τp ────────────────────────────
     # At is diagonal in the moments with entry τ_M u^τ; Ax likewise with τ_M u^r.

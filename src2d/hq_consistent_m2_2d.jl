@@ -182,6 +182,33 @@ Arguments are the solver's own symbols: `uT` is u^τ, `dtnx` = ∂_τν^x, `dxux
 end
 
 """
+    pi_sigma_contractions_2d(ux, uy, pxx, pxy, pyy, peta, σxx, σxy, σyy, σeta)
+        -> (πσ, c_xx, c_xy, c_yy)
+
+For a symmetric, traceless, u-orthogonal π and σ stored as transverse blocks plus
+their η-η entries (π^η_η, σ^η_η):
+
+    πσ   = π_{μν}σ^{μν}              — both indices lowered by the metric
+    c_ij = π^{(i}_λ σ^{j)λ}           — the symmetrised single contraction
+
+⚠ NOT `pxx σxx + 2 pxy σxy + …`: the stored components are CONTRAVARIANT, so lowering
+drags in the τ-rows (fixed by orthogonality) and the naive forms are wrong by O(u²) —
+the error that left Π_Q 3–5 % off in gate Gm1 before these were generated
+symbolically. Used by the charm second moment's class-(iii) coupling and, since
+2026-09-11, by the medium's τ_ππ and λ_Ππ couplings (the 2τ_M π^{λ⟨i}σ^{j⟩}_λ there is
+τ_ππ(c_ij − Δ^{ij}πσ/3) here). Gate Gd3 checks both against brute-force index algebra.
+"""
+@inline function pi_sigma_contractions_2d(ux::Float64, uy::Float64,
+                                          pxx::Float64, pxy::Float64, pyy::Float64, peta::Float64,
+                                          σxx::Float64, σxy::Float64, σyy::Float64, σeta::Float64)
+    πσ = (2*pxy*σxy + pyy*σyy + 2*pxy*σxy*ux^2 + 2*pyy*σyy*ux^2 + pyy*σyy*ux^4 - 2*pxy*σxx*ux*uy - 2*pyy*σxy*ux*uy - 2*pxy*σyy*ux*uy - 2*pyy*σxy*ux^3*uy - 2*pxy*σyy*ux^3*uy + 2*pxy*σxy*uy^2 + pyy*σxx*ux^2*uy^2 + 4*pxy*σxy*ux^2*uy^2 - 2*pxy*σxx*ux*uy^3 + pxx*σxx*(1 + uy^2)^2 + peta*σeta*(1 + ux^2 + uy^2)^2 + pxx*ux*uy*(σyy*ux*uy - 2*σxy*(1 + uy^2)))/(1 + ux^2 + uy^2)^2
+    c_xx = pxx*σxx + pxy*σxy - ((pxx*ux + pxy*uy)*(σxx*ux + σxy*uy))/(1 + ux^2 + uy^2)
+    c_yy = pxy*σxy + pyy*σyy - ((pxy*ux + pyy*uy)*(σxy*ux + σyy*uy))/(1 + ux^2 + uy^2)
+    c_xy = (pyy*(σxy + σxy*ux^2 - σxx*ux*uy) + pxy*(σxx + σyy + σyy*ux^2 - 2*σxy*ux*uy + σxx*uy^2) + pxx*(σxy - σyy*ux*uy + σxy*uy^2))/(2*(1 + ux^2 + uy^2))
+    return πσ, c_xx, c_xy, c_yy
+end
+
+"""
     rank1_traceless_2d(Ax, Ay, Bx, By, ux, uy, uτ) -> (qxx, qxy, qyy)
 
 Symmetric, traceless, transverse part of `A^{(i}B^{j)}` for two u-orthogonal
@@ -270,24 +297,11 @@ gate can hand both codes identical data.
     Dα   = uτ*dtα + ux*dxα + uy*dyα
     geo  = t.m2_expansion ? τM * ((5.0/3.0)*θ + DlnC) : 0.0     # class (iii) expansion
 
-    # π:σ = π_{μν}σ^{μν}, with BOTH indices lowered by the metric.
-    # ⚠ NOT `pxx σxx + 2 pxy σxy + pyy σyy + peta σeta`. The stored components are
-    # CONTRAVARIANT, so lowering drags in the τ-rows (themselves determined by
-    # orthogonality) and the contraction acquires u-dependent weights. The naive
-    # form is wrong by O(u²) — it is what left Π_Q 3-5 % off in gate Gm1 after
-    # every other term was exact. Generated symbolically from π_{μν}σ^{μν} with
-    # the τ-row derived; it reduces to the 1-D `p_l s_l + p_φ s_φ + p_η s_η` in
-    # the axisymmetric limit, which Gm1 checks.
-    πσ = (2*pxy*σxy + pyy*σyy + 2*pxy*σxy*ux^2 + 2*pyy*σyy*ux^2 + pyy*σyy*ux^4 - 2*pxy*σxx*ux*uy - 2*pyy*σxy*ux*uy - 2*pxy*σyy*ux*uy - 2*pyy*σxy*ux^3*uy - 2*pxy*σyy*ux^3*uy + 2*pxy*σxy*uy^2 + pyy*σxx*ux^2*uy^2 + 4*pxy*σxy*ux^2*uy^2 - 2*pxy*σxx*ux*uy^3 + pxx*σxx*(1 + uy^2)^2 + peta*σeta*(1 + ux^2 + uy^2)^2 + pxx*ux*uy*(σyy*ux*uy - 2*σxy*(1 + uy^2)))/(1 + ux^2 + uy^2)^2
-
-    # ── the (iii) coupling π_Q^{(i}_λ σ^{j)λ}, symmetrised ───────────────────
-    # ⚠ The index on π must be LOWERED by the metric before contracting, and the
-    # τ-row then contributes: the correction is −(π·u)^i(σ·u)^j/(u^τ)², which the
-    # naive transverse-only product omits. Same class of error as π:σ above.
-    # Generated symbolically alongside it.
-    c_xx = pxx*σxx + pxy*σxy - ((pxx*ux + pxy*uy)*(σxx*ux + σxy*uy))/(1 + ux^2 + uy^2)
-    c_yy = pxy*σxy + pyy*σyy - ((pxy*ux + pyy*uy)*(σxy*ux + σyy*uy))/(1 + ux^2 + uy^2)
-    c_xy = (pyy*(σxy + σxy*ux^2 - σxx*ux*uy) + pxy*(σxx + σyy + σyy*ux^2 - 2*σxy*ux*uy + σxx*uy^2) + pxx*(σxy - σyy*ux*uy + σxy*uy^2))/(2*(1 + ux^2 + uy^2))
+    # π:σ and the symmetrised (iii) contraction π_Q^{(i}_λ σ^{j)λ}, both with the
+    # metric (the τ-rows from orthogonality) — `pi_sigma_contractions_2d` above, shared
+    # with the MEDIUM's τ_ππ and λ_Ππ couplings since 2026-09-11 (same expressions,
+    # same order: bit-identical to the inline form it replaced).
+    πσ, c_xx, c_xy, c_yy = pi_sigma_contractions_2d(ux, uy, pxx, pxy, pyy, peta, σxx, σxy, σyy, σeta)
 
     # ── class (iv): the rank-1 ν⊗a and ν⊗∇(Th) structures ────────────────────
     # 2 λ_a a^{⟨i}ν^{j⟩} + (D_s/T) ν^{⟨i}∇^{j⟩}(Th): the symmetric TRACELESS
@@ -353,7 +367,10 @@ gate can hand both codes identical data.
     # ∂_τ(l l π) − l l ∂_τπ is exactly this term. The mis-mapped gate agreed with
     # the projector-less code at 1e-15. Gm1 now differentiates the projection
     # along the trajectory. Fluidum's HQ_2p1d_BG_m2.jl agreed with the old FiVo
-    # rows at 2.2e-16 (gate_2p1d_m2.jl N3), so it lacks the term too.
+    # rows at 2.2e-16 (gate_2p1d_m2.jl N3), so it lacked the term too — until
+    # 2026-09-11, when it gained the same correction (`projector = true`,
+    # HQ_2p1d_BG_m2.jl). Both codes now carry it and agree at 1.9e-16 on
+    # genuinely 2-D states (gate_2p1d_m2_newterms.jl M1).
     if t.m2_projector
         aτ = (ux*ax + uy*ay)/uτ                                   # u·a = 0
         Πq = shear_tensor_contravariant_2d(ux, uy, uτ, τ, pxx, pxy, pyy, peta)

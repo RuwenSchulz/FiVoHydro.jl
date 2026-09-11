@@ -36,6 +36,7 @@ const GATES = [
     ("Gc  consistent first moment",        "test_consistent_fm2d.jl",         true),
     ("Gm  consistent second moment",       "test_consistent_m22d.jl",         true),
     ("Gt  per-term switches + vorticity",  "test_terms2d.jl",                 true),
+    ("Gd  medium DNMR couplings vs 0+1D ODEs", "test_dnmr2d.jl",               false),
     ("G0  Bjorken",                        "test_bjorken2d.jl", false),
     ("G0b Bjorken + nonlinear bulk",       "test_bjorken_bulk2d.jl", false),
     ("G1  Gubser (analytic 2-D)",           "test_gubser2d.jl", false),

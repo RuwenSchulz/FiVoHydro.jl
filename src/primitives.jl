@@ -64,6 +64,27 @@ end
     return safe_div(η, (Ts * posden(sh.Cs)))
 end
 
+"""
+    warn_if_acausal_shear(; enable_shear, eta_over_s, tauShear_coeff, solver)
+
+Warn when the Israel–Stewart shear sector is acausal. With τ_π = η/(C_s T s) the
+coupling is η/(τ_π(e+P)) = C_s (at μ = 0), and for a conformal fluid causality of the
+longitudinal mode needs c_s² + (4/3) C_s ≤ 1, i.e. **C_s ≤ 1/2** (the bound loosens as
+c_s² drops below 1/3). An acausal IS theory is unstable in a moving frame (Pu, Koide &
+Rischke, PRD 81 (2010) 114039). MEASURED in the 1+1D solver on viscous Gubser flow
+(η/s = 0.1): stable at C_s ≤ 0.6, a runaway that grows with resolution at 0.8, a crash
+at 1.0 (2026-09-11; FiVoBenchmark's viscous Gubser ran at 1.0 only while ∂_τu^r was
+~4 % of its value — EQUATIONS1D.md §8). Production uses C_s = 0.2.
+"""
+function warn_if_acausal_shear(; enable_shear::Bool, eta_over_s::Real, tauShear_coeff::Real,
+                               solver::AbstractString = "FiVo")
+    if enable_shear && eta_over_s > 0 && tauShear_coeff > 0.5
+        @warn "$solver: tauShear_coeff = C_s = $tauShear_coeff > 1/2 — the shear sector is ACAUSAL " *
+              "(conformal IS needs η/(τ_π(e+P)) = C_s ≤ 1/2) and unstable in a moving frame. Production uses 0.2." maxlog = 1
+    end
+    return nothing
+end
+
 # ---- Bulk ----
 struct ZeroBulkViscosity <: BulkViscosity end
 @inline bulk_viscosity(T, th::LocalThermo, ::ZeroBulkViscosity) = 0.0
@@ -89,6 +110,11 @@ end
 # ------------------------------------------------------------
 # Model
 # ------------------------------------------------------------
+# The per-term switches (`Terms`, src/terms.jl) are a field of the model. Every
+# driver includes the register first; the guard covers the scripts that include
+# this file on its own (test_primrec2d*.jl, test_charge2d.jl).
+@isdefined(Terms) || include(joinpath(@__DIR__, "terms.jl"))
+
 struct IdealDiffViscModel{EOS,LAY,PR,SH<:ShearViscosity,BU<:BulkViscosity}
     eos::EOS
     layout::LAY
@@ -154,14 +180,25 @@ struct IdealDiffViscModel{EOS,LAY,PR,SH<:ShearViscosity,BU<:BulkViscosity}
     #                     J^r_D = -κ (u^τ)^2 ∂_r α in rhs!.  See
     #                     Tex/DensityFrame/df_fp_derivation.tex.
     charge_mode::Symbol
+
+    # THE THERMODYNAMICALLY CONSISTENT FIRST MOMENT in the bulk solver (2026-09-11):
+    # the five full-∇P sources of src/hq_consistent_firstmoment.jl (the O+O charm IS2
+    # production closure) subtracted from the ν^r relaxation target — the 1+1D twin of
+    # the 2-D `consistent_fm`. Default false = the shipped ∇α-only drive, bit-identical.
+    consistent_fm::Bool
+    # Per-term switches (src/terms.jl). `Terms()` = the equations as they stand.
+    terms::Terms
 end
 
 
-# Backward-compatible constructor: callers that predate the charge_mode field
+# Backward-compatible constructors. Callers that predate the charge_mode field
 # (e.g. mainBDNK.jl, the benches, test/runtests.jl) pass eos, layout, primrec + the 36 fields
-# up to relax_advect_pi (39 positional args); default charge_mode to :mis for them.  The full 40-argument
-# inner constructor remains available and is used by main.jl.
+# up to relax_advect_pi (39 positional args); callers that predate consistent_fm/terms pass 40
+# (… charge_mode). Both get the shipped defaults: charge_mode = :mis, consistent_fm = false,
+# terms = Terms(). The full 42-argument inner constructor is what main.jl uses.
 IdealDiffViscModel(eos, layout, primrec, rest::Vararg{Any,36}) =
-    IdealDiffViscModel(eos, layout, primrec, rest..., :mis)
+    IdealDiffViscModel(eos, layout, primrec, rest..., :mis, false, Terms())
+IdealDiffViscModel(eos, layout, primrec, rest::Vararg{Any,37}) =
+    IdealDiffViscModel(eos, layout, primrec, rest..., false, Terms())
 
 @inline layout(model::IdealDiffViscModel) = model.layout

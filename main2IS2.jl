@@ -25,10 +25,12 @@ include(joinpath(_SRC, "grid.jl"))
 include(joinpath(_SRC, "constants.jl"))
 include(joinpath(_SRC, "eos.jl"))
 include(joinpath(_SRC, "io.jl"))
+include(joinpath(_SRC, "terms.jl"))                  # Terms: the shared term register (src/terms.jl)
 include(joinpath(_SRC, "is2_second_moment_builder.jl"))
 include(joinpath(_SRC, "hq_consistent_firstmoment.jl"))
 include(joinpath(_SRC, "hq_consistent_m2.jl"))
 include(joinpath(_SRC, "logging_setup.jl"))
+include(joinpath(_SRC, "fields_io.jl"))              # save_fields / load_fields (shared)
 
 const TWO_PI = 2π
 const IS2_FREEZE_PDE_ALPHA = get(ENV, "FIVO_FREEZE_PDE_ALPHA", "1") == "1"
@@ -371,6 +373,17 @@ const IS2_CONSISTENT_FM = Ref(get(ENV, "FIVO_IS2_CONSISTENT",
 const IS2_DTALPHA = Float64[]
 
 const IS2_CONSISTENT_M2 = Ref(get(ENV, "FIVO_IS2_CONSISTENT_M2", "0") == "1")
+# ── PER-TERM SWITCHES (2026-09-11), src/terms.jl ────────────────────────────────────────────────
+# The shared `Terms` register, the same names the 2-D solver uses. Set for the duration of one
+# solve by `run_static_IS2_test(; terms = …)` and restored after it, like the two Refs above;
+# the default `Terms()` is the equations as they stood, bit for bit. What each switch reaches here:
+#   nu_gradalpha           At[2,1], Ax[2,1] of the matrix — the κ∇^⟨r⟩α drive (everywhere B = At⁻¹Ax
+#                          is used: centre, faces, the intra-cell drive)
+#   fm_*                   the five consistent first-moment sources (IS2_CONSISTENT_FM)
+#   m2_*                   the consistent second-moment rows (IS2_CONSISTENT_M2); m2_vorticity and
+#                          m2_projector vanish identically in the transported triad — accepted, inert
+#   shear_vorticity        no medium here (frozen background) — refused when named
+const IS2_TERMS = Ref(Terms())
 # ── Consistent 5-field (2026-08-25): with IS2_CONSISTENT_FM AND use_cM, the c_M back-coupling is
 # applied as an EXPLICIT SOURCE built from the complete abstract-route row (hq_cm_force — includes
 # the hoop-stress and τ-redshift geometric pieces the legacy basis-route matrix entries miss), and
@@ -452,6 +465,40 @@ function load_IS2_background(path::AbstractString)
             haskey(f, "drur_spline") || haskey(f, "drur_spline1") ? f[_k("drur_spline")] : nothing,
         )
     end
+end
+
+"""
+    TauRFunction(f)
+
+Wrap a Julia function `f(τ, r)` so it can stand where a background spline is
+called as `spl(r, τ)` — the argument order `load_IS2_background`'s splines use.
+"""
+struct TauRFunction{F}
+    f::F
+end
+(s::TauRFunction)(r, τ) = s.f(τ, r)
+
+"""
+    analytic_background(; T, ur = (τ, r) -> 0.0, alpha = nothing,
+                          dtT = nothing, drT = nothing, dtur = nothing, drur = nothing,
+                          r_grid = collect(0.0:0.05:30.0), t_grid = collect(0.1:0.01:30.0))
+        -> IS2Background
+
+A frozen background given by FUNCTIONS of (τ, r) instead of a JLD2 file — for
+closed-form flows (Bjorken, Gubser) and tests. Pass it as
+`run_static_IS2_test(; background = analytic_background(T = (τ, r) -> …))`.
+
+`r_grid`, `t_grid` only set the domain the solver clamps its lookups to. The
+gradients default to the solver's own finite differences of `T` and `ur`; give
+them in closed form when you have them. `alpha` (a function) is the fugacity the
+`init_mode = :background` IC reads.
+"""
+function analytic_background(; T, ur = (τ, r) -> 0.0, alpha = nothing,
+                             dtT = nothing, drT = nothing, dtur = nothing, drur = nothing,
+                             r_grid = collect(0.0:0.05:30.0), t_grid = collect(0.1:0.01:30.0))
+    w(f) = f === nothing ? nothing : TauRFunction(f)
+    return IS2Background(Float64.(r_grid), Float64.(t_grid), w(T), w(ur), nothing, w(alpha),
+                         nothing, nothing, nothing, nothing, w(dtT), w(drT), w(dtur), w(drur))
 end
 
 @inline function _u_from_v(v::Real)
@@ -1010,13 +1057,21 @@ function _build_reduced_system!(
         τ, r, ur_val, T, dtT, drT, drur, dtur,
         tp.n, tp.dn_dα, tp.dn_dT, κ_eff, τn_eff, tp.τM, tp.ηM, cM_matrix)
 
+    # terms.nu_gradalpha = false removes the fugacity drive κ∇^⟨r⟩α = κ(u^τ)²∂_rα + κu^r u^τ∂_τα
+    # of the ν^r row: its only entries are these two (src[2] carries no κ).
+    if !IS2_TERMS[].nu_gradalpha
+        At[2,1] = 0.0
+        Ax[2,1] = 0.0
+    end
+
     # Consistent first moment: the five derived source terms (flag, default off — see the
     # IS2_CONSISTENT_FM const and src/hq_consistent_firstmoment.jl). Sources only: At/Ax and
     # the CFL machinery are untouched, so flag-off is byte-identical production.
     if IS2_CONSISTENT_FM[]
         h_hqc, hp_hqc = hq_consistent_h_hp(T, DsT_val, τn_eff, eos)
         src[2] += hq_consistent_extras(τ, r_safe, ur_val, T, dtT, drT, drur, dtur,
-                                       tp.n, tp.dn_dT, U[2], τn_eff, tp.Ds, h_hqc, hp_hqc)
+                                       tp.n, tp.dn_dT, U[2], τn_eff, tp.Ds, h_hqc, hp_hqc;
+                                       terms = IS2_TERMS[])
         # The consistent c_M back-coupling as an explicit source (complete row, geometric
         # pieces included), Fluidum-parity vacuum damping n/(n+nfloor). Face calls carry
         # cm_dtz = cm_drz = 0 and their src_face_term is never consumed.
@@ -1244,7 +1299,8 @@ function _second_moment_eigen_rhs!(
                 piR, piP, bPi, nur,
                 (IS2_FREEZE_PDE_ALPHA && length(IS2_DTALPHA) >= i ? IS2_DTALPHA[i] : dU[1][i]),
                 dralpha, dtnur, drnur, (drR, drP, drB),
-                n_local, tp.τn, tp.Ds, h_m2, hp_m2, tauM, etaM, hq_mass(eos))
+                n_local, tp.τn, tp.Ds, h_m2, hp_m2, tauM, etaM, hq_mass(eos);
+                terms = IS2_TERMS[])
         end
         # vacuum ramp (same as the first-moment fields)
         w = _vacuum_weight(n_local, T)
@@ -1895,14 +1951,111 @@ end
 
 # ═══════════════════════ Entry point ══════════════════════════════
 """
-    run_static_IS2_test(; kwargs...)
+    run_static_IS2_test(; background_file, terms = :default,
+                          consistent_fm = nothing, consistent_m2 = nothing, kwargs...)
 
-Run the 5-component IS2 evolution on a static (or flowing) background.
-Returns a `Dict` with keys: `"r_grid"`, `"t_grid"`, `"n"`, `"nur"`,
-`"piQr"`, `"piQperp"`, `"PiQ"` (2D arrays [Nr × Nt]).
+Run the 5-component IS2 charm evolution `(α, ν^r, π_Q^r, π_Q^⊥, Π_Q)` on a frozen
+(static or flowing) background.
+
+* `consistent_fm`, `consistent_m2` — switch the thermodynamically consistent first /
+  second moment for THIS solve (`nothing` = leave the module Refs as they are, i.e.
+  ENV `FIVO_IS2_CONSISTENT` / `FIVO_IS2_CONSISTENT_M2`, or whatever a drop-in set).
+* `terms` — per-term switches, any spec `resolve_terms` accepts (src/terms.jl):
+  `:homogeneous`, `without(:acceleration)`, `(fm_inertial = false,)`, … The names are
+  the 2-D solver's. `show_equations_IS2()` prints what a configuration integrates.
+
+All three are restored when the solve returns, so they never leak into the next.
+Every other keyword: see `_run_static_IS2` (grid, times, IC, `use_cM`, `eos`, …).
+
+Returns a `Dict`: `"r_grid"`, `"t_grid"`, `"n"`, `"nur"`, `"alpha"`, `"piQr"`,
+`"piQperp"`, `"PiQ"` (arrays [Nr × Nt]), `"diagnostics"` (per solve), and the
+configuration it integrated: `"consistent_fm"`, `"consistent_m2"`, `"terms"`.
 """
-function run_static_IS2_test(;
-    background_file::String,
+function run_static_IS2_test(; terms = :default,
+                               consistent_fm::Union{Nothing,Bool} = nothing,
+                               consistent_m2::Union{Nothing,Bool} = nothing,
+                               kwargs...)
+    fm0 = IS2_CONSISTENT_FM[]; m20 = IS2_CONSISTENT_M2[]; t0 = IS2_TERMS[]
+    try
+        consistent_fm === nothing || (IS2_CONSISTENT_FM[] = consistent_fm)
+        consistent_m2 === nothing || (IS2_CONSISTENT_M2[] = consistent_m2)
+        son = sector_on_IS2()
+        t = resolve_terms(terms; sector_on = son)
+        check_terms(t, son; solver = "hydro_current_IS2")
+        IS2_TERMS[] = t
+        # per-SOLVE counters (they accumulated across calls in one process until 2026-09-11,
+        # so the diagnostics of a second solve reported the sum of both)
+        IS2_NU_BOUND_HITS[] = 0; IS2_JTAU_NEG[] = 0; IS2_CONE_HITS[] = 0
+        res = _run_static_IS2(; kwargs...)
+        res["consistent_fm"] = IS2_CONSISTENT_FM[]
+        res["consistent_m2"] = IS2_CONSISTENT_M2[]
+        res["terms"] = t
+        return res
+    finally
+        IS2_CONSISTENT_FM[] = fm0; IS2_CONSISTENT_M2[] = m20; IS2_TERMS[] = t0
+    end
+end
+
+"""
+    sector_on_IS2() -> (sector::Symbol -> Bool)
+
+Which term sectors the IS2 charm solver carries right now: diffusion always, the two
+consistent closures as their Refs say, and no medium (the background is frozen).
+"""
+sector_on_IS2() = s -> s === :enable_diff ? true :
+                       s === :consistent_fm ? IS2_CONSISTENT_FM[] :
+                       s === :consistent_m2 ? IS2_CONSISTENT_M2[] : false
+
+"""
+    show_equations_IS2([io]; terms = :default, consistent_fm = nothing,
+                       consistent_m2 = nothing, use_cM = false)
+
+Print the charm system `run_static_IS2_test` would integrate with these settings —
+every term marked `[x]` / `[ ]`, the knob that controls it, and the ones that vanish
+identically in radial symmetry. Same keywords as the solver; nothing is changed.
+"""
+show_equations_IS2(; kw...) = show_equations_IS2(stdout; kw...)
+function show_equations_IS2(io::IO; terms = :default, consistent_fm::Union{Nothing,Bool} = nothing,
+                            consistent_m2::Union{Nothing,Bool} = nothing, use_cM::Bool = false)
+    fm = consistent_fm === nothing ? IS2_CONSISTENT_FM[] : consistent_fm
+    m2 = consistent_m2 === nothing ? IS2_CONSISTENT_M2[] : consistent_m2
+    son = s -> s === :enable_diff ? true : s === :consistent_fm ? fm : s === :consistent_m2 ? m2 : false
+    t = resolve_terms(terms; sector_on = son)
+    check_terms(t, son; solver = "hydro_current_IS2")
+    mk(b) = b ? "[x]" : "[ ]"
+    println(io, "FiVo 1+1D charm IS2 (main2IS2.jl) — on a FROZEN background T(τ,r), u^r(τ,r)")
+    println(io, "  radial Milne (τ,r,φ,η), boost invariant; D = u^τ∂_τ + u^r∂_r; fields (α, ν^r, π_Q^r, π_Q^⊥, Π_Q)")
+    println(io, "  charge       ∂_τ(τ r J^τ) + ∂_r(τ r J^r) = 0,  J^μ = n(α) u^μ + ν^μ   (conservative q-transport)")
+    println(io, "  current      τ_n Δ^r_ν Dν^ν + ν^r = drive^r")
+    for (n, s, _, what) in TERM_REGISTER
+        (s === :enable_diff || s === :consistent_fm) || continue
+        on = getfield(t, n) && son(s)
+        println(io, "               ", mk(on), " ", what, "   terms.", n, s === :consistent_fm ? "  (consistent_fm)" : "")
+    end
+    fm || println(io, "               (consistent_fm = false: the shipped row — the homogeneous-medium reduction)")
+    println(io, "               ", mk(use_cM), " c_M D_s/T × ∇·(π_Q + Π_Q Δ)  second-moment back-coupling  use_cM")
+    if m2
+        println(io, "  2nd moment [x] consistent_m2: τ_M D p_i + p_i + S_i = 0 (transported triad l, φ̂, η̂)")
+        for (n, s, _, what) in TERM_REGISTER
+            s === :consistent_m2 || continue
+            if n in ZERO_IN_RADIAL
+                println(io, "               ≡0  ", what, "   terms.", n, "  (vanishes in radial symmetry)")
+            else
+                println(io, "               ", mk(getfield(t, n)), " ", what, "   terms.", n)
+            end
+        end
+    else
+        println(io, "  2nd moment [ ] consistent_m2 = false: the SHIPPED rows (`_second_moment_eigen_rhs!`,",
+                " Fluidum's HQ_const_BG_2nd_moment; not switchable term by term)")
+    end
+    println(io, "  regulators   vacuum ramp n_lo/n_hi = $(IS2_VACUUM_N_LO)/$(IS2_VACUUM_N_HI) fm⁻³, α floor $(IS2_ALPHA_MIN),",
+            " ν bound $(IS2_NU_BOUND) ($(IS2_NU_BOUND_LRF ? "lrf" : "lab")), KO σ (kwarg σ_KO) — ENV, see README.md")
+    return nothing
+end
+
+function _run_static_IS2(;
+    background_file::Union{String,Nothing} = nothing,
+    background::Union{IS2Background,Nothing} = nothing,
     DsT = 0.1163,   # canonical const D_sT = 0.116 (= 1.765·T_fo − 0.159 at T_fo = 0.156)
     τ0::Float64  = 0.4,
     τfinal::Float64 = 8.0,
@@ -1931,7 +2084,10 @@ function run_static_IS2_test(;
     fail_on_eigen_failure::Bool = false,
     max_solver_warnings::Int = 20,
 )
-    bg = load_IS2_background(background_file)
+    (background_file === nothing) == (background === nothing) &&
+        error("run_static_IS2_test: give exactly one of `background_file` (a JLD2 bundle) " *
+              "or `background` (an `IS2Background`, e.g. `analytic_background(T = (τ, r) -> …)`)")
+    bg = background === nothing ? load_IS2_background(background_file) : background
     rmax_use = min(rmax, last(bg.r_grid))
     grid = IS2Grid1D(Nr, rmax_use)
 

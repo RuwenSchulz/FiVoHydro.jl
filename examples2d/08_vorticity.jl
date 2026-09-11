@@ -12,9 +12,10 @@ example is how that default is meant to be revisited: run the same event twice a
 WHY IT IS OFF. It vanishes IDENTICALLY in 1+1D — a radial flow has no transverse vorticity — so the
 1-D solver never needed it, both 2-D codes were written from the 1-D reduction, and neither carried
 it until 2026-09-10. Every 1-D-limit gate is structurally blind to its absence, and the cross-code
-gate agrees at 2.2e-16 because BOTH codes omit it (Fluidum's `HQ_2p1d_BG_m2.jl` still does). Turning
-it on in FiVo therefore breaks parity with Fluidum — a reason to decide deliberately, not a reason
-the term is wrong.
+gate agreed at 2.2e-16 because BOTH codes omitted it. Fluidum's `HQ_2p1d_BG_m2.jl` gained it on
+2026-09-11 and the two now agree at 4.9e-16 with it ON in both (gate_2p1d_m2_newterms.jl M2) — so
+turning it on no longer breaks parity, but it IS a physics decision, to be taken in both codes at
+once and on a measurement. This file is that measurement.
 
 WHAT THIS FILE MEASURES, on one real Pb+Pb event:
   * |ω| against |σ| over the fireball — the size of the term's coefficient relative to its sibling,

@@ -331,7 +331,7 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
             n = work.n[i]; e = work.e[i]; P = work.P[i]
 
             if model.enable_bulk && L.hasPi
-                relax_bulk_cell_2d!(U, i, model, ux, uy, uτ, kin, T, μ, n, e, P, Δ, upw)
+                relax_bulk_cell_2d!(U, i, model, ux, uy, uτ, τ, kin, T, μ, n, e, P, Δ, upw)
             end
             if model.enable_shear && L.hasShear
                 relax_shear_cell_2d!(U, i, model, ux, uy, uτ, τ, kin, T, μ, n, e, P, Δ, upw)
@@ -366,16 +366,16 @@ end
 # bulk
 # ------------------------------------------------------------------------------
 """
-    relax_bulk_cell_2d!(U, i, model, ux, uy, uτ, kin, T, μ, n, e, P, Δ, upw)
+    relax_bulk_cell_2d!(U, i, model, ux, uy, uτ, τ, kin, T, μ, n, e, P, Δ, upw)
 
-    τ_Π (u^τ ∂_τ + u^k ∂_k) Π + Π = −ζ θ
+    τ_Π (u^τ ∂_τ + u^k ∂_k) Π + Π = −ζ θ − δ_ΠΠ θ Π − λ_Ππ π:σ
 
 Backward Euler in `u^τ∂_τ` (`A = τ_Π u^τ/Δ`), the transverse advection upwinded
 from the pre-relaxation snapshot (`relax_advect_Pi`), then the positivity guard
 `P + Π > 0` and the optional `Pi_clip_factor`.
 """
 @inline function relax_bulk_cell_2d!(U::AbstractMatrix, i::Int, model::IdealDiffVisc2DModel,
-                                     ux::Float64, uy::Float64, uτ::Float64, kin,
+                                     ux::Float64, uy::Float64, uτ::Float64, τ::Float64, kin,
                                      T::Float64, μ::Float64, n::Float64, e::Float64, P::Float64,
                                      Δ::Float64, upw)
     L = model.layout
@@ -386,7 +386,21 @@ from the pre-relaxation snapshot (`relax_advect_Pi`), then the positivity guard
         ΠNS = -ζ*θ
         A   = safe_div(τΠ*uτ, Δ)
         advΠ = model.relax_advect_Pi ? -τΠ*upw(L.iPi, i, ux, uy) : 0.0
-        Pi_new = (A*Pi_new + ΠNS + advΠ)/(A + 1)
+        # the DNMR couplings (2026-09-11; EQUATIONS2D §3), both default 0:
+        #   −δ_ΠΠ θ Π (implicit, in the denominator) and −λ_Ππ π:σ (explicit, on the shear
+        #   as it stands before this step's shear update — the cell loop runs bulk first,
+        #   as the 1-D solver does). Mostly-plus: DNMR's "+λ_Ππ π:σ" flips sign.
+        δΠ = model.deltaPi_factor * τΠ
+        if model.lambda_Pi_pi_factor != 0.0 && model.enable_shear && L.hasShear
+            θ_, ax, ay, _, dxux, dxuy, dyux, dyuy = kin
+            σxx, σxy, σyy, ση = ns_shear_target_2d(ux, uy, uτ, τ, θ_, ax, ay, dxux, dxuy, dyux, dyuy, -0.5)
+            πσ, _, _, _ = pi_sigma_contractions_2d(ux, uy,
+                phys_from_stored(U[L.iPixx,i]), phys_from_stored(U[L.iPixy,i]),
+                phys_from_stored(U[L.iPiyy,i]), phys_from_stored(U[L.iPieta,i]), σxx, σxy, σyy, ση)
+            advΠ -= model.lambda_Pi_pi_factor * τΠ * πσ
+        end
+        Pi_new = δΠ == 0.0 ? (A*Pi_new + ΠNS + advΠ)/(A + 1) :
+                             (A*Pi_new + ΠNS + advΠ)/max(A + 1 + δΠ*θ, 0.5*(A + 1))
         # POSITIVITY of the total pressure. Not a tuning knob: measured on
         # the production IC with bulk+diffusion, |Pi|/P reached 3.50 and
         # min(P+Pi) went NEGATIVE (-2.7e-4), which makes the effective
@@ -408,7 +422,8 @@ end
     relax_shear_cell_2d!(U, i, model, ux, uy, uτ, τ, kin, T, μ, n, e, P, Δ, upw)
 
     τ_π (u^τ ∂_τ + u^k ∂_k) π^{ij} + π^{ij}
-        = −2η σ^{ij} − δ_ππ θ π^{ij} + τ_π (u^i c^j + u^j c^i),   c^j = π^{jβ} a_β
+        = −2η σ^{ij} − δ_ππ θ π^{ij} + τ_π (u^i c^j + u^j c^i)
+          − τ_ππ π^{λ⟨i}σ^{j⟩}_λ − λ_πΠ Π σ^{ij} − 2τ_π π^{λ⟨i}ω_λ^{j⟩},   c^j = π^{jβ} a_β
 
 (the last term is the projector `Δ^{ij}_{αβ}` acting on `Dπ^{αβ}`, see this file's
 header). Evolves the transverse block `(π^{xx}, π^{xy}, π^{yy})`; `π^η_η` is then
@@ -452,6 +467,50 @@ restored from tracelessness, never evolved.
         axx = ra ? -τπ*upw(L.iPixx, i, ux, uy) : 0.0
         axy = ra ? -τπ*upw(L.iPixy, i, ux, uy) : 0.0
         ayy = ra ? -τπ*upw(L.iPiyy, i, ux, uy) : 0.0
+
+        # THE MEDIUM'S VORTICITY COUPLING  2τ_π π^{λ⟨i}ω_λ^{j⟩}  (terms.shear_vorticity,
+        # OFF by default; added 2026-09-11). On the LEFT of the equation with a plus,
+        # like the charm second moment's twin (hq_consistent_m2_2d.jl): it is the
+        # antisymmetric half of the kinematic contraction π^{λ⟨i}∇_λu^{j⟩} that the
+        # Boltzmann streaming term produces, and its coefficient is fixed (2τ_π), not
+        # a transport coefficient — DNMR's "+2τ_π π_λ^⟨μ ω^ν⟩λ" on the right in the
+        # mostly-minus metric is this term. Same function as the charm's, so gate Gt4
+        # (brute-force index algebra, 1e-14) covers its sign and normalisation, and
+        # Gt8 ties the two call sites together. Zero for any radial (1-D) flow.
+        # Not carried by Fluidum (EQUATIONS2D §7); off so every number stays put.
+        if model.terms.shear_vorticity
+            iuτ = safe_inv(uτ)
+            dtux = (ax - ux*dxux - uy*dyux) * iuτ           # from a^i = u^m ∂_m u^i
+            dtuy = (ay - ux*dxuy - uy*dyuy) * iuτ
+            wxx, wxy, wyy = vorticity_coupling_2d(ux, uy, uτ, τ, pixx, pixy, piyy, pieta,
+                                                  ax, ay, dtux, dtuy, dxux, dxuy, dyux, dyuy)
+            axx -= τπ*wxx; axy -= τπ*wxy; ayy -= τπ*wyy
+        end
+
+        # THE DNMR COUPLINGS τ_ππ and λ_πΠ (2026-09-11; EQUATIONS2D §2), both default 0.
+        # On the LEFT: τ_ππ π^{λ⟨i}σ^{j⟩}_λ + λ_πΠ Π σ^{ij} — DNMR's "−τ_ππ π^⟨μ_λσ^ν⟩λ +
+        # λ_πΠ Πσ^μν" in the mostly-plus metric, where the first keeps its sign and the
+        # second flips; the same form, with the same signs, as the 1-D solver (whose own
+        # λ signs and τ_ππ trace were corrected the same day). Explicit, on the shear
+        # before this update and the bulk after its own (bulk runs first). The ⟨⟩ projection
+        # of the symmetrised contraction is c_ij − Δ^{ij} π:σ/3, the helper the charm
+        # second moment's class-(iii) coupling uses (`pi_sigma_contractions_2d`).
+        if model.taupi_pi_factor != 0.0 || model.lambda_pi_Pi_factor != 0.0
+            σxx, σxy, σyy, ση = ns_shear_target_2d(ux, uy, uτ, τ, θ, ax, ay, dxux, dxuy, dyux, dyuy, -0.5)
+            if model.taupi_pi_factor != 0.0
+                τππ = model.taupi_pi_factor * τπ
+                πσ, c_xx, c_xy, c_yy = pi_sigma_contractions_2d(ux, uy, pixx, pixy, piyy, pieta,
+                                                                σxx, σxy, σyy, ση)
+                axx -= τππ*(c_xx - (1 + ux*ux)*πσ/3)
+                axy -= τππ*(c_xy - (ux*uy)*πσ/3)
+                ayy -= τππ*(c_yy - (1 + uy*uy)*πσ/3)
+            end
+            if model.lambda_pi_Pi_factor != 0.0 && model.enable_bulk && L.hasPi
+                λΠ = model.lambda_pi_Pi_factor * τπ * phys_from_stored(U[L.iPi,i])
+                axx -= λΠ*σxx; axy -= λΠ*σxy; ayy -= λΠ*σyy
+            end
+        end
+
         pixx = (A*pixx + nsxx + pd*(2*ux*cx)      + axx) / den
         pixy = (A*pixy + nsxy + pd*(ux*cy + uy*cx) + axy) / den
         piyy = (A*piyy + nsyy + pd*(2*uy*cy)      + ayy) / den

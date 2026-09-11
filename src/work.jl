@@ -77,6 +77,11 @@ mutable struct Work1D
     # This is part of Fluidum's covariant gradient projection — required for FiVo's first-order
     # diffusion to match Fluidum's IS2 charm current (≈2× under-driven without the ∂τα term).
     alpha_prev::Vector{Float64}
+
+    # Previous-step temperature, for the ∂_τT of the consistent first moment's sources
+    # (`consistent_fm`, 2026-09-11): the pressure-gradient T channel and D ln h need DT.
+    # NaN-seeded like alpha_prev; the ∂_τT pieces are dropped on the first step.
+    T_prev::Vector{Float64}
 end
 
 function make_work(U)
@@ -86,7 +91,8 @@ function make_work(U)
     # exceed Threads.nthreads()).  Under-sizing here BoundsErrors the threaded loops.
     nt = Threads.nthreads() + Threads.nthreads(:interactive)
     return Work1D(
-        zeros(Ntot), zeros(Ntot), zeros(Ntot), zeros(Ntot), zeros(Ntot), zeros(Ntot),
+        # yT, phi, mu, alpha, y, y_prev — y_prev NaN-seeded: no ∂_τu^r on the first step
+        zeros(Ntot), zeros(Ntot), zeros(Ntot), zeros(Ntot), zeros(Ntot), fill(NaN, Ntot),
         zeros(Ntot), zeros(Ntot), zeros(Ntot), falses(Ntot),
 
         fill(log(0.25), Ntot), zeros(Ntot), zeros(Ntot),
@@ -143,6 +149,7 @@ function make_work(U)
         fill(1e-30, nt),
         fill(0.0, nt),
         fill(NaN, Ntot),   # alpha_prev — NaN marks "no previous substep yet" (∂τα term skipped then)
+        fill(NaN, Ntot),   # T_prev — same convention, for the consistent first moment's ∂τT
     )
 end
 

@@ -34,6 +34,7 @@ const _SRC2D = joinpath(@__DIR__, "src2d")
 include(joinpath(_SRC, "constants.jl"))
 include(joinpath(_SRC, "utils.jl"))
 include(joinpath(_SRC, "eos.jl"))
+include(joinpath(_SRC, "terms.jl"))            # Terms: the shared term register (1+1D and 2+1D)
 include(joinpath(_SRC, "primitives.jl"))       # transport-coefficient models
 include(joinpath(_SRC, "relaxation_laws.jl"))
 
@@ -56,10 +57,12 @@ include(joinpath(_SRC2D, "hq_consistent_m2_2d.jl"))
 include(joinpath(_SRC2D, "dissipation2d.jl"))
 include(joinpath(_SRC2D, "floors2d.jl"))
 include(joinpath(_SRC2D, "timestepper2d.jl"))
+include(joinpath(_SRC, "fields_io.jl"))            # save_fields / load_fields (shared)
 
 export make_grid2d, make_layout2d, build_model_2d, allocate_state,
        initialize_uniform!, run_sim_2d!, LatticeHRGEOS, ConformalHQEOS,
-       Terms2D, show_equations, fields_2d
+       Terms, Terms2D, without, show_terms, show_equations, fields_2d,
+       save_fields, load_fields
 
 # ------------------------------------------------------------------------------
 # Model / state construction
@@ -73,9 +76,11 @@ Assemble the model with a layout matching the enabled sectors. Defaults reproduc
 the BARE scheme (ideal fluid, no stabilizers), mirroring main.jl's kwarg defaults.
 
 Every other field of `IdealDiffVisc2DModel` can be passed as a keyword (README2D.md
-lists them). `terms` switches individual terms of the charm sector and takes a
-`Terms2D` or a `NamedTuple`, e.g. `terms = (fm_inertial = false,)`; see
-`src2d/terms2d.jl`. `show_equations(model)` prints what the result integrates.
+lists them). `terms` switches individual terms and takes any spec `resolve_terms`
+accepts (src/terms.jl): a preset (`:default`, `:homogeneous`, `:full`, `:none`),
+`without(:vorticity, :acceleration)`, a `NamedTuple` such as
+`(fm_inertial = false,)` or `(preset = :full, without = (:acceleration,))`, or a
+`Terms`. `show_equations(model)` prints what the result integrates.
 """
 function build_model_2d(; eos = LatticeHRGEOS(),
                           r_domain::Float64 = Inf,
@@ -90,6 +95,7 @@ function build_model_2d(; eos = LatticeHRGEOS(),
                         with_bulk   = enable_bulk,
                         with_shear  = enable_shear,
                         with_m2     = get(kwargs, :consistent_m2, false))
+    warn_if_acausal_shear(; enable_shear, eta_over_s, tauShear_coeff, solver = "build_model_2d")
     sh = enable_shear ? QGPViscosity(eta_over_s, tauShear_coeff) : ZeroViscosity()
     bu = enable_bulk  ? SimpleBulkViscosity(zeta_over_s, tauPi_coeff) : ZeroBulkViscosity()
 
@@ -106,7 +112,11 @@ function build_model_2d(; eos = LatticeHRGEOS(),
                                enable_bulk  = enable_bulk,  bulk  = bu,
                                enable_diff  = enable_diff,
                                E_vac_cut = Evac, r_domain = r_domain,
-                               terms = terms2d(get(kwargs, :terms, Terms2D())),
+                               terms = terms2d(get(kwargs, :terms, :default);
+                                               sector_on = sector_on_2d(;
+                                                   enable_diff, enable_shear,
+                                                   consistent_fm = get(kwargs, :consistent_fm, false),
+                                                   consistent_m2 = get(kwargs, :consistent_m2, false))),
                                filter(p -> !(p.first in (:E_vac_cut, :terms)), kwargs)...)
     reject_unwired_knobs_2d(m)   # see primitives2d.jl — eight 1-D knobs the 2-D solver never reads
     return m

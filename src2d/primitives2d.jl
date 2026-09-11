@@ -214,7 +214,7 @@ end
 # ------------------------------------------------------------------------------
 # Unwired knobs — refuse them loudly instead of ignoring them silently.
 #
-# Eight fields above exist for signature parity with the 1-D IdealDiffViscModel
+# Eight fields above existed for signature parity with the 1-D IdealDiffViscModel
 # but NOTHING in src2d/ or main2D.jl reads them (verified by grep, 2026-09-04),
 # while the 1-D solver honours all eight. `build_model_2d(; kwargs...)` forwards
 # them into the struct without complaint, so before this guard a 1-D↔2-D A/B at
@@ -226,14 +226,13 @@ end
 # it is an error, in the LangevInMedium-0.2.3 style: refuse with a message that
 # names the alternative.
 # ------------------------------------------------------------------------------
+#
+# 2026-09-11: four of the eight are now WIRED and gated (test_dnmr2d.jl, Gd) — the
+# medium's DNMR couplings τ_ππ, δ_ΠΠ, λ_Ππ, λ_πΠ (dissipation2d.jl) — and left this list.
 const _UNWIRED_KNOBS_2D = (
     (:diffusion_drive,     :alpha),
     (:diff_dt_coeff,       0.0),
-    (:taupi_pi_factor,     0.0),
     (:shear_dt_coeff,      0.0),
-    (:deltaPi_factor,      0.0),
-    (:lambda_Pi_pi_factor, 0.0),
-    (:lambda_pi_Pi_factor, 0.0),
     (:bulk_dt_coeff,       0.0),
 )
 

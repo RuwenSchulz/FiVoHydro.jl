@@ -77,7 +77,13 @@ and the charge sector altogether.
 $$
 \tau_\pi\,\Delta^{ij}{}_{\alpha\beta}\,D\pi^{\alpha\beta} + \pi^{ij}
 = -2\eta\,\sigma^{ij} - \delta_{\pi\pi}\,\theta\,\pi^{ij}
+- \tau_{\pi\pi}\,\pi^{\lambda\langle i}\sigma^{j\rangle}{}_\lambda - \lambda_{\pi\Pi}\,\Pi\,\sigma^{ij}
+- 2\tau_\pi\,\pi^{\lambda\langle i}\omega_\lambda{}^{j\rangle}
 $$
+
+The last three terms are DNMR's $-\tau_{\pi\pi}\pi^{\langle\mu}{}_\lambda\sigma^{\nu\rangle\lambda} + \lambda_{\pi\Pi}\Pi\sigma^{\mu\nu} + 2\tau_\pi\pi_\lambda{}^{\langle\mu}\omega^{\nu\rangle\lambda}$
+(mostly-minus) in this code's mostly-plus metric: the $\tau_{\pi\pi}$ and ω terms keep their form, λ_πΠ flips.
+All three default to off/0 (since 2026-09-11 they are wired; before, the two factors were refused).
 
 For a symmetric, traceless, $u$-orthogonal tensor the projector acts as
 
@@ -113,6 +119,9 @@ $$
 | $-\delta_{\pi\pi}\theta\pi^{ij}$ | `relax_shear_cell_2d!` (denominator) | `deltaShear_factor = 0` | W5 (closed form 1.1e-12) |
 | $\tau_\pi(u^ic^j + u^jc^i)$ | `relax_shear_cell_2d!` | `shear_projected_deriv = false` | W2 |
 | $\tau_\pi u^k\partial_k\pi^{ij}$ (upwind) | `relax_shear_cell_2d!` | `relax_advect_pi = false` | W6 (live update, config B) |
+| $2\tau_\pi\pi^{\lambda\langle i}\omega_\lambda{}^{j\rangle}$ — **off by default** | `relax_shear_cell_2d!` → `vorticity_coupling_2d` | `terms.shear_vorticity` | Gt4 (the function), **Gt8** (on a solve) |
+| $\tau_{\pi\pi}\pi^{\lambda\langle i}\sigma^{j\rangle}{}_\lambda = \tau_{\pi\pi}(c^{ij} - \Delta^{ij}\pi\!:\!\sigma/3)$ | ″ → `pi_sigma_contractions_2d` | `taupi_pi_factor` (default 0) | **Gd1** (0+1D DNMR ODE), Gd3 (the contraction vs brute force) |
+| $\lambda_{\pi\Pi}\Pi\sigma^{ij}$ | ″ | `lambda_pi_Pi_factor` (default 0) | Gd1, Gd2 (= the 1-D solver to 1e-15) |
 
 Coefficients: $\eta = (\eta/s)\,s\,\hbar c$, $\;\tau_\pi = \eta/(C_s\,T\,s)$ (`eta_over_s`, `tauShear_coeff` $= C_s$),
 $\;\delta_{\pi\pi} = $ `deltaShear_factor` $\times\,\tau_\pi$.
@@ -125,7 +134,7 @@ $\;\delta_{\pi\pi} = $ `deltaShear_factor` $\times\,\tau_\pi$.
 ## 3. Bulk
 
 $$
-\tau_\Pi\left(u^\tau\partial_\tau + u^k\partial_k\right)\Pi + \Pi = -\zeta\,\theta
+\tau_\Pi\left(u^\tau\partial_\tau + u^k\partial_k\right)\Pi + \Pi = -\zeta\,\theta - \delta_{\Pi\Pi}\,\theta\,\Pi - \lambda_{\Pi\pi}\,\pi\!:\!\sigma
 $$
 
 $\zeta = (\zeta/s)(T)\,s\,\hbar c$ with the Lorentzian peak
@@ -137,6 +146,8 @@ $\tau_\Pi = \zeta / \left[C_\zeta\,T\,s\,(1/3 - c_s^2)^2\right] + 0.1$ fm
 |---|---|---|---|
 | $-\zeta\theta$ | `relax_bulk_cell_2d!` | `enable_bulk` | G0b (nonlinear Bjorken), W2 (Π row 7.9e-14) |
 | $\tau_\Pi u^k\partial_k\Pi$ | `relax_bulk_cell_2d!` | `relax_advect_Pi = false` | — |
+| $-\delta_{\Pi\Pi}\theta\Pi$ (implicit) | ″ | `deltaPi_factor` (default 0) | Gd1 |
+| $-\lambda_{\Pi\pi}\pi:\sigma$ (explicit; mostly-plus sign) | ″ → `pi_sigma_contractions_2d` | `lambda_Pi_pi_factor` (default 0) | Gd1, Gd2, Gd3 |
 | positivity $P + \Pi > 0.01P$ | `relax_bulk_cell_2d!` | always on (a guard, §8) | — |
 
 ---
@@ -317,8 +328,8 @@ Order: 2.00 on Bjorken, 1.9–2.1 on Gubser (ideal); first order once a dissipat
 
 | | why |
 |---|---|
-| medium: $\tau_{\pi\pi}\pi\sigma$ (`taupi_pi_factor`), $\lambda_{\pi\Pi}$, $\lambda_{\Pi\pi}$ (`lambda_*_factor`), $\delta_{\Pi\Pi}$ (`deltaPi_factor`) | the medium is Israel–Stewart plus $\delta_{\pi\pi}$ only. These knobs exist for parity with the 1-D model and are **refused** at non-default values (`reject_unwired_knobs_2d`) |
-| medium: $\varphi_7\pi\pi$, the medium's own $\pi\omega$ coupling | not implemented at all (no knob) — the same truncation Fluidum makes |
+| ~~medium: $\tau_{\pi\pi}$, $\lambda_{\pi\Pi}$, $\lambda_{\Pi\pi}$, $\delta_{\Pi\Pi}$~~ | **wired since 2026-09-11** (§2, §3; gate Gd). Until then they were refused (`reject_unwired_knobs_2d`) |
+| medium: $\varphi_7\pi\pi$ | not implemented (no knob) — the same truncation Fluidum makes. (The medium's $\pi\omega$ coupling IS available since 2026-09-11: `terms.shear_vorticity`, §2, off by default) |
 | charm $c_M$ back-coupling ($\pi_Q \to \nu$) | the second moment is passive; the 1-D `hq_cm_force` has no 2-D twin |
 | thermal / hydrodynamic fluctuations | none, in either solver |
 | a $\tau_n$ / $h$ decoupled from the EoS mass | `transport_mass` reaches the second moment's coefficients and $\tau_M$, but $\tau_n$, $h$ and $h'$ still use the EoS mass |
@@ -360,6 +371,18 @@ Order: 2.00 on Bjorken, 1.9–2.1 on Gubser (ideal); first order once a dissipat
 
 Newest first. Each entry is also recorded at the code it concerns.
 
+**2026-09-11 — the medium's DNMR couplings are wired** (τ_ππ, λ_πΠ, δ_ΠΠ, λ_Ππ; §2–§3), with the
+equations and signs the 1-D solver was corrected to the same day, and gated against the 0+1D DNMR ODEs (Gd).
+π:σ and the ⟨⟩-projected π·σ come from `pi_sigma_contractions_2d`, factored out of the charm second moment
+without changing its arithmetic (a 2-D run with every sector and both closures is bit-identical to the
+previous commit).
+
+**2026-09-11 — the term switches became the shared `Terms` (src/terms.jl)** with presets, `without(...)` by
+ingredient and a sector rule; `Terms2D` is an alias, and every default is unchanged (Gt1–Gt6 pass at the same
+numbers). Added `terms.shear_vorticity`, the medium's vorticity coupling (§2), off by default. No 2-D arithmetic
+changed with the defaults. The 1+1D solver's corrections of the same day (EQUATIONS1D.md §8) touch 2-D only
+through the gates that compare against it (G4, G7).
+
 **2026-09-10 — the charm second moment lacked the projector on its comoving derivative.**
 The medium shear always carried $\tau_\pi(u^ic^j + u^jc^i)$; the charm second moment integrated a bare
 $\tau_M D\pi_Q^{ij}$. At gate Gm1's states the missing term is 0.02–0.57 % of the rate. Gm1 could not
@@ -368,7 +391,10 @@ $l^\mu = (u^r, u^\tau)$ moves with the flow, and the difference is exactly this 
 states with different gradients (the 1-D side had $\partial_r p_l = 0$, the 2-D side $\partial_x\pi^{xx} = 0$).
 Gm1 now differentiates the projection along the trajectory and matches the states; it holds at 4e-16
 with the term, and fails at 5.7e-3 without it. `terms = (m2_projector = false,)` reproduces the old
-rows. Fluidum's `HQ_2p1d_BG_m2.jl` agreed with the old rows at 2.2e-16 (N3), so it lacks the term too
+rows. Fluidum's `HQ_2p1d_BG_m2.jl` agreed with the old rows at 2.2e-16 (N3), so it lacked the term
+too — **until 2026-09-11**, when both terms were derived symbolically (`derive_hq_m2_2p1d.wls`
+G6/G7, 22/22) and implemented there as well. The two codes now agree at ~1e-16 with the projector on,
+with the vorticity coupling on, and with both (`gate_2p1d_m2_newterms.jl` M1-M3)
 — not changed there.
 
 **2026-09-10 — the consistent first moment had the wrong sign.**

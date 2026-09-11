@@ -484,14 +484,30 @@ end
 # ------------------------------------------------------------
 # Dissipative relaxation: ν_r + Π + π (semi-implicit BE)
 # ------------------------------------------------------------
+# A/B switch for the ∂_τu^r history fix of 2026-09-11 (see the note at the top of
+# `relax_dissipative!`). `false` = the fixed code; `true` reproduces the old
+# arithmetic, for measuring what the fix moves. Not a physics option.
+const HYDRO_LEGACY_DTAU_UR = Ref(false)
+
 function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Work1D;
                             diag::Union{Nothing,DiagCounters}=nothing)
     L = model.layout
     Ntot = size(U,2)
 
-    # Cache previous-step rapidity so we can approximate D0 u^r = ∂_τ u^r
-    # during this relaxation substep.
-    copyto!(work.y_prev, work.y)
+    # ∂_τ u^r = (u^r − u^r_prev)/Δ needs the rapidity of the PREVIOUS STEP in y_prev.
+    # 🔴 2026-09-11: until today y_prev was copied from work.y HERE, at entry. But
+    # work.y at entry holds the primitives of the last RK STAGE (rhs! rewrites it
+    # every stage, at τ+Δ), not of the previous step: measured on a flowing fireball,
+    # |y_prev − y_new| = 3e-4 against |y_old − y_new| = 7e-3, i.e. ∂_τu^r came out at
+    # ~4 % of its value. Everything built from it was short: θ_full's ∂_τu^τ, the NS
+    # targets through θ_full (Π_NS = −ζθ, σ^φ_φ, σ^η_η), the charge projector term
+    # τ_n v Dy ν, and σ_ll. The same trap alpha_prev fell into (see below) — the fix
+    # is the same: store the history at the END of this routine. NaN-seeded
+    # (make_work), so the ∂_τ pieces are dropped on the first step, as in 2-D.
+    # Gate: test/test_gubser_viscous1d.jl (viscous Gubser vs its semi-analytic ODE).
+    if HYDRO_LEGACY_DTAU_UR[]
+        copyto!(work.y_prev, work.y)
+    end
     # NB: work.alpha_prev is intentionally NOT refreshed here. It must hold the PREVIOUS timestep's α
     # so the covariant drive's temporal piece ∂τα = (α − α_prev)/Δ is nonzero. Copying it at entry
     # (as was done) made α_prev ≡ α ⇒ ∂τα ≡ 0 ⇒ ν^r ≈2× under-driven vs Fluidum. It is now stored at
@@ -642,14 +658,17 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
             θ  = work.theta[i]
 
             # Full expansion scalar for second-order terms (include ∂τ u^τ).
-            ur_prev = sinh(work.y_prev[i])
-            durdτ = safe_div((ur - ur_prev), Δ)
+            yp = work.y_prev[i]
+            durdτ = isfinite(yp) ? safe_div((ur - sinh(yp)), Δ) : 0.0
             duτdτ = safe_div(ur, uτ) * durdτ
             θ_full = θ + duτdτ
 
-            # Diagonal shear rate (mixed rr) used in ν⋅σ coupling.
+            # Shear rate along the boosted radial direction l = (u^r, u^τ), used in
+            # the ν⋅σ coupling:  σ_ll = D_l u^r / u^τ − θ/3 = ∂_r u^r + v ∂_τ u^r − θ/3.
+            # 🔴 2026-09-11: the v ∂_τ u^r piece was missing (σ_ll read ∂_r u^r − θ/3).
+            # Only `lambda_NN_factor` reads it, which defaults to 0 and no caller sets.
             durdr = work.dvdr[i]
-            σr = durdr - θ_full / 3
+            σr = durdr + v * durdτ - θ_full / 3
 
             # Projected comoving derivative term from
             #   Δ^r{}_ν (u·∇) ν^ν
@@ -679,7 +698,9 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
             #          FiVo first-order current is ≈2× under-driven vs Fluidum's IS2 charm (Pb+Pb
             #          hydro-comparison). Restores the BIGRUN-2 Fluidum↔FiVo agreement (3–10%).
             # :n     -> density-based form:    ν_NS = -D uτ^2 [∂r n - (∂n/∂T)|α ∂r T]
-            νNS_raw = if drive === :alpha
+            νNS_raw = if !model.terms.nu_gradalpha
+                0.0                        # terms.nu_gradalpha = false: no fugacity drive
+            elseif drive === :alpha
                 αp = work.alpha_prev[i]
                 # Guard: skip ∂τα on the very first substep (alpha_prev unprimed: NaN/0.0).
                 dαdτ = (isfinite(αp) && αp != 0.0) ? safe_div(α - αp, Δ) : 0.0
@@ -690,6 +711,37 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
                 dn_dT_alpha = diff_dn_dT_at_fixed_alpha(T, α, model)
                 dn_corr = dn_dr - dn_dT_alpha * dT_dr
                 -D * (uτ^2) * dn_corr
+            end
+            # THE CONSISTENT FIRST MOMENT (consistent_fm, 2026-09-11) — the five full-∇P
+            # sources of src/hq_consistent_firstmoment.jl, the SAME function the O+O charm
+            # IS2 production closure adds to its src[2]. It returns s SOURCE-ON-THE-LHS
+            # (τ_n Δ Dν + ν + κ∇^⟨r⟩α + s = 0), and this update integrates the RIGHT-hand
+            # side, so s is SUBTRACTED — the sign the 2-D solver had wrong for two days
+            # (EQUATIONS2D.md §10). Gate X1 (test/test_diffusion_mode.jl) checks the sign
+            # on a solve against a closed-form referee; T2/T3 (test_terms1d.jl) the pieces.
+            # Explicit in ν (the ν-proportional terms read ν at the start of the step),
+            # as in 2-D. h, h′ and ∂n/∂T are the closed forms; τ_n is this solver's bare
+            # chain, so τ_n T/D_s == h (tauN_coeff ≠ 1 is refused by build_model_1d).
+            # ⚠ WAIT FOR THE ∂_τ HISTORY. On a history-less step (the first of a run,
+            # T_prev/y_prev NaN) ∂_τT and ∂_τu^r are unknown. Dropping them there — what
+            # `kinematics_2d` does for the MEDIUM — is wrong for THESE sources: the
+            # pressure-gradient and inertial terms cancel by Euler only as a PAIR, and
+            # ∇T is available while a = u^τ∂_τu^r + … is not, so the first step would
+            # push an uncancelled ∇T drive into ν for one step. Skipping the sources on
+            # that step is the same remedy as the 2-D second moment's "wait for the
+            # history" (2026-09-09). MEASURED, the kick is small — one step is short
+            # against τ_n (test_terms1d.jl T4: the pair's residual 1.44 → 1.43 of the
+            # ∇α-driven max|ν|); that residual is the AXIS CELL's O(dr) mismatch between
+            # the solver's acceleration and ∇T, which halves with each refinement.
+            if model.consistent_fm && isfinite(work.T_prev[i]) && isfinite(work.y_prev[i])
+                Tp = work.T_prev[i]
+                dtT = (T - Tp) / Δ
+                drT = (exp(work.yT[i+1]) - exp(work.yT[i-1])) / (2 * grid.dr)
+                h_c, hp_c = hq_h_hprime(T, model.eos)
+                s_c = hq_consistent_extras(τ, posden(grid.rC[i]), ur, T, dtT, drT, durdr, durdτ,
+                                           n, hq_dn_dT(T, n, model.eos), work.nur_tmp[i],
+                                           τn, D, h_c, hp_c; terms = model.terms)
+                νNS_raw -= s_c
             end
             νNS_phys = model.do_soft_project_nur ? _soft_project_nur_phys(νNS_raw, n, uτ) : νNS_raw
 
@@ -767,6 +819,12 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
         # Persist this step's (smoothed) α so the NEXT step's covariant drive has a true
         # temporal piece ∂τα = (α − α_prev)/Δ (restores ~Fluidum-level ν^r; see entry note).
         copyto!(work.alpha_prev, work.alpha)
+        # … and T, for the consistent first moment's ∂_τT, on the same schedule.
+        if model.consistent_fm
+            @inbounds for j in 1:Ntot
+                work.T_prev[j] = exp(work.yT[j])
+            end
+        end
     end
 
     # ---- bulk + shear ----
@@ -805,8 +863,8 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
             # Full expansion scalar θ = ∇_μ u^μ.
             # `compute_theta_u!` drops ∂τ u^τ during the relaxation substep, so we add
             # it back using a backward difference for full/second-order terms (and bulk).
-            ur_prev = sinh(work.y_prev[i])
-            durdτ = safe_div((ur - ur_prev), Δ)
+            yp = work.y_prev[i]
+            durdτ = isfinite(yp) ? safe_div((ur - sinh(yp)), Δ) : 0.0
             duτdτ = safe_div(ur, uτ) * durdτ
             θ_full = θ + duτdτ
 
@@ -875,7 +933,15 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
                 Πold = work.visc_tmp1[i]
                 A = safe_div((τΠ * uτ), Δ)
 
-                # Bulk/shear coupling term: +λΠπ (π:σ)
+                # Bulk/shear coupling, DNMR's "+λ_Ππ π^{μν}σ_μν" (mostly-MINUS metric),
+                # which in THIS code's mostly-PLUS convention (π_NS = −2ησ) reads
+                #     τ_Π DΠ + Π = −ζθ − δ_ΠΠ Πθ − λ_Ππ π:σ .
+                # 🔴 2026-09-11: this was `+ λΠπ πσ` — DNMR's sign copied without the
+                # convention change, so a positive λ_Ππ pushed Π the wrong way. Referee:
+                # the 0+1D Bjorken reduction, dΠ/dτ ⊃ +λ_Ππ φ/(τ τ_Π) with φ = −τ²π^{ηη}
+                # (Jaiswal–Ryblewski–Strickland); here π:σ = −φ/τ on Bjorken, so −λπ:σ
+                # = +λφ/τ. Also σ_ll gained its v ∂_τ u^r piece. Default factor 0, no
+                # caller sets it — nothing shipped moves. Gate: test/test_bjorken1d.jl.
                 πσ = 0.0
                 if model.enable_shear && λΠπ != 0.0
                     pr = (L.hasPiR   ? phys_from_stored(U[L.iPiR,i])   : 0.0)
@@ -883,7 +949,7 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
                     pp = -(pr + pe)
 
                     rC = posden(grid.rC[i])
-                    σr_loc = dur - θ_full / 3
+                    σr_loc = dur + v * durdτ - θ_full / 3
                     σφ_loc = ur / rC - θ_full / 3
                     ση_loc = uτ * invτ - θ_full / 3
                     πσ = pr * σr_loc + pp * σφ_loc + pe * ση_loc
@@ -891,7 +957,7 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
 
                 denom = A + 1 + (δΠ * θ_full)
                 denom = max(denom, 1e-12)
-                Πnew_phys = (A * Πold - τΠ * ur * dΠ_dr + ΠNS_phys + (λΠπ * πσ)) / denom
+                Πnew_phys = (A * Πold - τΠ * ur * dΠ_dr + ΠNS_phys - (λΠπ * πσ)) / denom
 
                 U[L.iPi,i] = stored_from_phys(Πnew_phys)
             end
@@ -933,13 +999,32 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
 
                 Πphys = (model.enable_bulk && L.hasPi) ? phys_from_stored(U[L.iPi,i]) : 0.0
 
+                # Second-order couplings, DNMR's "−τ_ππ π^{⟨μ}_λσ^{ν⟩λ} + λ_πΠ Π σ^{μν}"
+                # (mostly-MINUS). In this code's mostly-PLUS convention (π_NS = −2ησ)
+                # the first keeps its sign and the second flips:
+                #     … = −2ησ − δ_ππ θ π − τ_ππ (π_i σ_i − π:σ/3) − λ_πΠ Π σ_i ,
+                # for the diagonal orthonormal channels i ∈ {φ, η} evolved here.
+                # 🔴 2026-09-11, two defects fixed (both factors default 0 and no caller
+                # sets them — nothing shipped moves):
+                #   * τ_ππ carried only π_iσ_i: the −π:σ/3 trace of the ⟨⟩ projection was
+                #     missing, which on Bjorken doubles the term (−(2/3) vs −(1/3) τ_ππ φ/τ);
+                #   * λ_πΠ had DNMR's mostly-minus sign (`+ λπΠ Π σ`).
+                # Referee: the 0+1D Bjorken ODEs of Jaiswal–Ryblewski–Strickland,
+                #     dφ/dτ ⊃ −(τ_ππ/3) φ/(τ τ_π) + (2/3) λ_πΠ Π/(τ τ_π) ;
+                # gate test/test_bjorken1d.jl. τ_ππ π_iσ_i stays implicit (denominator),
+                # the trace is explicit on the old state.
+                πσ_old = 0.0
+                if τππ != 0.0
+                    σl = dur + v * durdτ - θ_full / 3
+                    πσ_old = (-(pp_old + pe_old)) * σl + pp_old * σφ + pe_old * ση
+                end
                 denom_pp = A + 1 + δπ * θ_full + τππ * σφ
                 denom_pe = A + 1 + δπ * θ_full + τππ * ση
                 denom_pp = max(denom_pp, 1e-12)
                 denom_pe = max(denom_pe, 1e-12)
 
-                pp_new = (A * pp_old - τπ * ur * dpp_dr + pp_NS + λπΠ * Πphys * σφ) / denom_pp
-                pe_new = (A * pe_old - τπ * ur * dpe_dr + pe_NS + λπΠ * Πphys * ση) / denom_pe
+                pp_new = (A * pp_old - τπ * ur * dpp_dr + pp_NS + τππ * πσ_old / 3 - λπΠ * Πphys * σφ) / denom_pp
+                pe_new = (A * pe_old - τπ * ur * dpe_dr + pe_NS + τππ * πσ_old / 3 - λπΠ * Πphys * ση) / denom_pe
                 pr_new = -(pp_new + pe_new)
 
                 if L.hasPiR
@@ -1054,6 +1139,8 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
         end
     end
 
+    # Persist this step's rapidity for the NEXT step's ∂_τ u^r (see the entry note).
+    HYDRO_LEGACY_DTAU_UR[] || copyto!(work.y_prev, work.y)
     return nothing
 end
 

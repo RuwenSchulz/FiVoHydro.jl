@@ -28,6 +28,15 @@
 # Gt5  refusal: a switch in a disabled sector, and an unknown name, are errors.
 # Gt6  on a SOLVE: default `terms` is bit-identical to no `terms` at all, and every
 #      first-moment switch moves the evolved current.
+# Gt7  the shared interface (src/terms.jl, 2026-09-11): presets, `without` by
+#      ingredient, the sector rule (implicit changes in an off sector are reset,
+#      explicit ones refused), and on a SOLVE: `terms = :homogeneous` with
+#      consistent_fm = true reproduces consistent_fm = false exactly — the
+#      shipped row IS the homogeneous-medium reduction.
+# Gt8  the MEDIUM vorticity coupling 2τ_π π^{λ⟨i}ω_λ^{j⟩} (terms.shear_vorticity):
+#      inert on an axisymmetric solve (radial flow has no vorticity), acts on a
+#      rotating one, and — the physical content of an antisymmetric coupling —
+#      leaves π:π unchanged to first order (it only ROTATES π).
 # ==============================================================================
 
 using Printf
@@ -111,9 +120,9 @@ function gate_Gt1()
     @test names == collect(fieldnames(H2.Terms2D))
     d = H2.Terms2D()
     for f in fieldnames(H2.Terms2D)
-        @test getfield(d, f) == (f !== :m2_vorticity)
+        @test getfield(d, f) == !(f in (:m2_vorticity, :shear_vorticity))
     end
-    @printf("  %d terms registered, all on by default except m2_vorticity\n", length(names))
+    @printf("  %d terms registered, all on by default except the two vorticity couplings\n", length(names))
     @test :m2_projector in names
     return 0.0
 end
@@ -340,9 +349,117 @@ function gate_Gt6()
     return 0.0
 end
 
+# ------------------------------------------------------------------------------
+function gate_Gt7()
+    println("\nGt7 — presets, without(), the sector rule, and :homogeneous == the shipped row")
+    # register-level
+    h = H2.resolve_terms(:homogeneous)
+    @test h.nu_gradalpha && h.m2_nu_gradient && h.m2_bg_Dalpha
+    @test !h.fm_gradT && !h.fm_inertial && !h.fm_nu_gradu && !h.fm_expansion && !h.fm_dlnh
+    @test !h.m2_projector && !h.m2_accel_nu && !h.m2_bg_gradu && !h.shear_vorticity
+    f = H2.resolve_terms(:full);  @test all(getfield(f, n) for n in fieldnames(H2.Terms))
+    z = H2.resolve_terms(:none);  @test !any(getfield(z, n) for n in fieldnames(H2.Terms))
+    w = H2.resolve_terms(H2.without(:acceleration))
+    @test !w.fm_inertial && !w.m2_projector && !w.m2_accel_nu && w.fm_gradT && w.m2_bg_gradu
+    w2 = H2.resolve_terms(H2.without(:inertia; from = :full))
+    @test !w2.fm_inertial && w2.m2_vorticity && w2.shear_vorticity
+    v = H2.resolve_terms((with = (:vorticity,),))
+    @test v.m2_vorticity && v.shear_vorticity && v.fm_inertial
+    g = H2.resolve_terms(H2.without(:velocity_gradient))
+    @test !g.fm_nu_gradu && !g.fm_expansion && !g.m2_pi_sigma && g.fm_inertial && g.fm_gradT
+    @test_throws ErrorException H2.resolve_terms(H2.without(:vortcity))            # typo
+    @test_throws ErrorException H2.resolve_terms(:homogenous)                       # typo
+    # sector rule: an implicit change in an off sector is reset, an explicit one refused
+    base = (; eos = H2.LatticeHRGEOS(), enable_diff = true, kappa_coeff = 0.1163)
+    m = H2.build_model_2d(; base..., terms = :homogeneous)        # consistent_fm off: fine
+    @test m.terms == H2.Terms()
+    @test_throws ErrorException H2.build_model_2d(; base..., terms = (preset = :homogeneous, fm_dlnh = false))
+    println("  presets / without / with / groups resolve as documented; typos refused; sector rule holds")
+    # on a solve: consistent_fm + :homogeneous  ==  the shipped row, bit for bit
+    function run(; kw...)
+        gr = H2.make_grid2d(24, 24; xmax = 6.0, ymax = 6.0)
+        mm = H2.build_model_2d(; base..., kw...)
+        U = H2.allocate_state(gr, mm)
+        for ix in 1:gr.Nxtot, iy in 1:gr.Nytot
+            x = gr.xC[ix]; y = gr.yC[iy]
+            T = 0.15 + 0.30*exp(-(x^2/1.3 + y^2/0.8)/6)
+            H2.set_cell!(U, H2.lin(gr, ix, iy), T, -4.0 + 0.8*exp(-((x+1)^2 + y^2)/4), 0.0, 0.0, 0.4, mm)
+        end
+        H2.finalize_ic!(U, gr, mm; τ0 = 0.4)
+        H2.run_sim_2d!(U, gr, mm; τ0 = 0.4, τfinal = 0.9)
+        return U
+    end
+    Ush = run()
+    Uho = run(; consistent_fm = true, terms = :homogeneous)
+    same = Ush == Uho
+    @test same
+    println("  consistent_fm = true, terms = :homogeneous  ==  consistent_fm = false, bit for bit: ", same)
+    return 0.0
+end
+
+# ------------------------------------------------------------------------------
+function gate_Gt8()
+    println("\nGt8 — the medium vorticity coupling (terms.shear_vorticity)")
+    function run(vort::Bool; swirl::Float64)
+        gr = H2.make_grid2d(32, 32; xmax = 6.0, ymax = 6.0)
+        mm = H2.build_model_2d(; eos = H2.LatticeHRGEOS(), enable_shear = true, eta_over_s = 0.2,
+                                 terms = (shear_vorticity = vort,))
+        U = H2.allocate_state(gr, mm)
+        for ix in 1:gr.Nxtot, iy in 1:gr.Nytot
+            x = gr.xC[ix]; y = gr.yC[iy]; r2 = x^2 + y^2
+            T = 0.15 + 0.30*exp(-r2/8)
+            # a rigid-ish swirl (u^φ ∝ r e^{-r²/8}) on top of a round fireball
+            ux = -swirl*y*exp(-r2/8); uy = swirl*x*exp(-r2/8)
+            H2.set_cell!(U, H2.lin(gr, ix, iy), T, -4.0, ux, uy, 0.6, mm)
+        end
+        H2.finalize_ic!(U, gr, mm; τ0 = 0.6)
+        res = H2.run_sim_2d!(U, gr, mm; τ0 = 0.6, τfinal = 1.6)
+        return U, mm.layout, res
+    end
+    # (a) no swirl: radial flow, no vorticity => the switch is inert up to the
+    #     O(h²) vorticity a Cartesian stencil manufactures on a round profile
+    #     (measured 5e-6 of max|π| at 32², not round-off — hence the bound, and the
+    #     comparison with (b) below rather than an absolute zero)
+    U0, L, _ = run(false; swirl = 0.0); U1, _, _ = run(true; swirl = 0.0)
+    pis(U) = vcat(U[L.iPixx, :], U[L.iPixy, :], U[L.iPiyy, :])
+    da = maximum(abs, pis(U1) .- pis(U0)) / maximum(abs, pis(U0))
+    @printf("  (a) round fireball, no swirl:    switch moves π by %.2e of max|π|\n", da)
+    @test da < 1e-4
+    # (b) with swirl the coupling acts, by far more than the stencil vorticity of (a)
+    S0, _, r0 = run(false; swirl = 0.3); S1, _, r1 = run(true; swirl = 0.3)
+    @test r0.ok && r1.ok
+    db = maximum(abs, pis(S1) .- pis(S0)) / maximum(abs, pis(S0))
+    @printf("  (b) swirling fireball:          switch moves π by %.2e of max|π|  (%.0f× (a))\n", db, db/da)
+    @test db > 100*da
+    # (c) the coupling only ROTATES π: its contraction with π vanishes identically,
+    #     π_{ij} X^{ij} = 0 for X = 2π^{λ⟨i}ω_λ^{j⟩} (π symmetric, ω antisymmetric) —
+    #     checked at random states with the metric (π_{ij} = g g π^{ij}, τ-rows by
+    #     orthogonality), so the coupling cannot heat or cool the stress.
+    rng = MersenneTwister(5); worst = 0.0
+    for _ in 1:200
+        ux, uy = 0.6randn(rng), 0.6randn(rng); uτ = sqrt(1 + ux^2 + uy^2); τ = 0.5 + rand(rng)
+        pxx, pxy, pyy = 0.1randn(rng), 0.1randn(rng), 0.1randn(rng)
+        pe, _ = H2.project_shear_traceless_2d(ux, uy, uτ, pxx, pxy, pyy, 0.0)
+        # consistent kinematics: a^i = u^τ∂_τu^i + u^k∂_ku^i (with independent random
+        # a^i, ω is not u-orthogonal and the τ-rows below would be wrong)
+        dtux, dtuy, dxux, dxuy, dyux, dyuy = 0.2 .* randn(rng, 6)
+        ax = uτ*dtux + ux*dxux + uy*dyux; ay = uτ*dtuy + ux*dxuy + uy*dyuy
+        X = H2.vorticity_coupling_2d(ux, uy, uτ, τ, pxx, pxy, pyy, pe,
+                                     ax, ay, dtux, dtuy, dxux, dxuy, dyux, dyuy)
+        Π = H2.shear_tensor_contravariant_2d(ux, uy, uτ, τ, pxx, pxy, pyy, pe)
+        # full 3×3 (τ,x,y) contraction π_{μν}X^{μν}; X^{τi} from orthogonality u_μX^{μν} = 0
+        Xtx = (ux*X[1] + uy*X[2])/uτ; Xty = (ux*X[2] + uy*X[3])/uτ; Xtt = (ux*Xtx + uy*Xty)/uτ
+        c = Π.tt*Xtt - 2Π.tx*Xtx - 2Π.ty*Xty + Π.xx*X[1] + 2Π.xy*X[2] + Π.yy*X[3]
+        worst = max(worst, abs(c) / (abs(Π.xx) + abs(Π.yy) + 1e-30) / (maximum(abs, X) + 1e-30))
+    end
+    @printf("  (c) π_{μν}·(2π^{λ⟨μ}ω_λ^{ν⟩}) over 200 random states: worst rel %.2e\n", worst)
+    @test worst < 1e-12
+    return 0.0
+end
+
 function main()
     @testset "Gt: term switches (2+1D)" begin
-        gate_Gt1(); gate_Gt2(); gate_Gt3(); gate_Gt4(); gate_Gt5(); gate_Gt6()
+        gate_Gt1(); gate_Gt2(); gate_Gt3(); gate_Gt4(); gate_Gt5(); gate_Gt6(); gate_Gt7(); gate_Gt8()
     end
 end
 main()

@@ -180,8 +180,16 @@ end
 #
 # Notes:
 # - We follow the same MOOD+dt-halving strategy as SSPRK2.
-# - For simplicity (and to match the existing dissipative relaxation treatment),
-#   we apply stage post-processing at the same stage time τ+Δ.
+# - Stage times are Shu–Osher's: L(U) at τ, L(U1) at τ+Δ, L(U2) at τ+Δ/2.
+#   🔴 2026-09-11: until today every stage was post-processed and evaluated at
+#   τ+Δ. The RHS depends on τ explicitly (the Milne sources −S/τ, −(E+P+…)/τ and
+#   D = Dtau/τ in the primitive recovery), so evaluating L(U2) at the wrong time
+#   made the scheme FIRST order: uniform ideal Bjorken, conformal, τ 1→5,
+#   rel. error in T 6.7e-3 / 4.3e-3 / 2.2e-3 at CFLτ = 0.05 / 0.025 / 0.0125.
+#   Production is unaffected (`run_sim_ideal_diff_visc` defaults to :ssprk2, which
+#   is Heun and was always right); the CLI `main()` and FiVoBenchmark default to
+#   :ssprk3. The operator-split relaxation still runs once, at τ+Δ, after the
+#   final stage — which is what keeps a dissipative run first order (as in 2-D).
 # ------------------------------------------------------------
 function step_ssprk3!(U, grid, τ, Δτ, model::IdealDiffViscModel, work::Work1D;
                       Emin::Float64=E_FLOOR,
@@ -259,6 +267,9 @@ function step_ssprk3!(U, grid, τ, Δτ, model::IdealDiffViscModel, work::Work1D
         end
 
         # --- stage 2 ---
+        # U2 = ¾U + ¼(U1 + Δ L(U1)) is the state at τ + Δ/2 (Shu–Osher), so it is
+        # post-processed, and the stage-3 RHS evaluated, at τh — see the header note.
+        τh = τ + 0.5*Δ
         local ok2 = false
         force_mask = nothing
         for retry in 0:max_stage_retries
@@ -267,19 +278,19 @@ function step_ssprk3!(U, grid, τ, Δτ, model::IdealDiffViscModel, work::Work1D
             diag === nothing || _abort_on_first_primfail!(diag, work.U1, grid, τ+Δ, model, work, retry; Emin=Emin, χ=χ)
 
             @. work.U2 = (3/4)*U + (1/4)*(work.U1 + Δ*work.k)
-            apply_bc!(work.U2, grid, τ+Δ, model)
+            apply_bc!(work.U2, grid, τh, model)
             _repair_Dtau_positivity!(work.U2, work.U1, grid, model)
-            enforce_floors!(work.U2, grid, τ+Δ, model; Emin=Emin, diag=diag)
-            _repair_theta_admissibility!(work.U2, work.U1, grid, τ+Δ, model, work; Emin=Emin, χ=χ, mask=nothing, diag=diag)
+            enforce_floors!(work.U2, grid, τh, model; Emin=Emin, diag=diag)
+            _repair_theta_admissibility!(work.U2, work.U1, grid, τh, model, work; Emin=Emin, χ=χ, mask=nothing, diag=diag)
             enforce_Sr_energy_constraint!(work.U2, grid, model; χ=χ, P=work.P, mask=nothing, diag=diag)
 
-            apply_bc!(work.U2, grid, τ+Δ, model)
+            apply_bc!(work.U2, grid, τh, model)
 
             if SANITIZE_SCOPE == :global
-                sanitize_state!(work.U2, grid, τ+Δ, model; Emin=Emin, mask=nothing, diag=diag)
+                sanitize_state!(work.U2, grid, τh, model; Emin=Emin, mask=nothing, diag=diag)
             end
 
-            if !DO_MOOD || !any_bad(work.U2, grid, τ+Δ, model, work; Emin=Emin, χ=χ)
+            if !DO_MOOD || !any_bad(work.U2, grid, τh, model, work; Emin=Emin, χ=χ)
                 ok2 = true
                 break
             end
@@ -287,18 +298,18 @@ function step_ssprk3!(U, grid, τ, Δτ, model::IdealDiffViscModel, work::Work1D
             last_fail_stage = 2
             last_fail_tau   = τ + Δ
             last_fail_Δ     = Δ
-            last_fail_i, last_fail_why = _find_first_bad(work.U2, grid, τ+Δ, model, work; Emin=Emin, χ=χ)
+            last_fail_i, last_fail_why = _find_first_bad(work.U2, grid, τh, model, work; Emin=Emin, χ=χ)
 
-            mark_bad!(bad, work.U2, grid, τ+Δ, model, work; Emin=Emin, χ=χ)
+            mark_bad!(bad, work.U2, grid, τh, model, work; Emin=Emin, χ=χ)
             expand_bad!(bad, bad_tmp, grid; radius=1+retry)
             diag === nothing || diag_add!(diag; mood2=count(bad))
 
             if hydro_flags().write_badmask
-                write_badmask_csv(joinpath("debug_masks", @sprintf("bad_stage2_tau_%06.3f_retry_%d.csv", τ+Δ, retry)), bad, grid)
+                write_badmask_csv(joinpath("debug_masks", @sprintf("bad_stage2_tau_%06.3f_retry_%d.csv", τh, retry)), bad, grid)
             end
 
             if SANITIZE_SCOPE == :local
-                sanitize_state!(work.U2, grid, τ+Δ, model; Emin=Emin, mask=bad, diag=diag)
+                sanitize_state!(work.U2, grid, τh, model; Emin=Emin, mask=bad, diag=diag)
                 enforce_Sr_energy_constraint!(work.U2, grid, model; χ=χ, P=work.P, mask=bad, diag=diag)
             end
 
@@ -315,9 +326,9 @@ function step_ssprk3!(U, grid, τ, Δτ, model::IdealDiffViscModel, work::Work1D
         local ok3 = false
         force_mask = nothing
         for retry in 0:max_stage_retries
-            rhs!(work.k, work.U2, grid, τ+Δ, model, work; Emin=Emin, force_first_order=force_mask, diag=diag)
-            diag === nothing || _maybe_log_primfail!(diag, work.U2, grid, τ+Δ, model, work, retry; Emin=Emin, χ=χ)
-            diag === nothing || _abort_on_first_primfail!(diag, work.U2, grid, τ+Δ, model, work, retry; Emin=Emin, χ=χ)
+            rhs!(work.k, work.U2, grid, τh, model, work; Emin=Emin, force_first_order=force_mask, diag=diag)
+            diag === nothing || _maybe_log_primfail!(diag, work.U2, grid, τh, model, work, retry; Emin=Emin, χ=χ)
+            diag === nothing || _abort_on_first_primfail!(diag, work.U2, grid, τh, model, work, retry; Emin=Emin, χ=χ)
 
             # Reuse U1 as the final buffer.
             @. work.U1 = (1/3)*U + (2/3)*(work.U2 + Δ*work.k)

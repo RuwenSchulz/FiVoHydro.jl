@@ -14,7 +14,7 @@ dimension-agnostic files with it (`README.md`, "Two solvers in one package").
 | [`examples2d/`](examples2d/README.md) | nine runnable examples, each seconds to minutes, each with a figure; three also write animations |
 | [`TWOD_PROGRAM.md`](TWOD_PROGRAM.md) | the chronological build log: every derivation, measurement and retraction |
 
-**Status (2026-09-11).** The ladder is 21 gates, all passing: two analytic solutions (Bjorken,
+**Status (2026-09-11).** The ladder is 22 gates, all passing: two analytic solutions (Bjorken,
 Gubser), sound propagation, reproduction of the 1-D production solver, closed-form referees for the
 charm sector, and cross-code agreement with Fluidum. Not on any manuscript's production path; used
 by `Projects/FiVoFluidumComparison` and one O+O animation. Read §7 before quoting a number from
@@ -83,7 +83,7 @@ scheme**; every sector and every regulator is opt-in. Any field below can be pas
 | `enable_diff`, `kappa_coeff` | `false`, **0.0** | charge diffusion with $D_sT$ = `kappa_coeff`. ⚠ set it: 0 means no diffusion at all |
 | `consistent_fm` | `false` | the full-∇P first moment (four extra terms, EQUATIONS2D §4) |
 | `consistent_m2` | `false` | the passive charm second moment $(\pi_Q^{ij}, \Pi_Q)$ (EQUATIONS2D §5) |
-| `terms` | `Terms2D()` | per-term switches inside the two closures, e.g. `(fm_inertial = false,)` — §3 |
+| `terms` | `:default` | per-term switches: a preset (`:homogeneous`, `:full`, `:none`), `without(:acceleration, …)`, or a NamedTuple such as `(fm_inertial = false,)` — §3 |
 | `transport_mass` | 0.0 (= EoS mass) | charm mass in the second moment's Bessel ratios and $\tau_M$ |
 | `tauN_coeff`, `deltaN_factor` | 1.0, 0.0 | $\tau_n$ multiplier (refused with `consistent_fm`), $\delta_{nn}/\tau_n$ |
 
@@ -105,9 +105,11 @@ scheme**; every sector and every regulator is opt-in. Any field below can be pas
 | `pi_clip_factor`, `Pi_clip_factor`, `nu_clip_factor` | −1 (off) | $\lvert\pi\rvert, \lvert\Pi\rvert \le fP$, $\lvert\nu\rvert \le f\,n\,u^\tau$. Use `pi_clip_factor = 1` on lumpy events |
 | `r_domain` | `Inf` | evolve only the disc $r \le r_{\rm domain}$ |
 
+**Second-order medium couplings** (DNMR; all default 0, EQUATIONS2D §2–3, gate Gd): `taupi_pi_factor`
+(τ_ππ/τ_π), `lambda_pi_Pi_factor` (λ_πΠ/τ_π), `deltaPi_factor` (δ_ΠΠ/τ_Π), `lambda_Pi_pi_factor` (λ_Ππ/τ_Π).
+
 Refused at non-default values, because nothing in `src2d/` reads them (they exist for signature
-parity with the 1-D model): `diffusion_drive`, `diff_dt_coeff`, `taupi_pi_factor`, `shear_dt_coeff`,
-`deltaPi_factor`, `lambda_Pi_pi_factor`, `lambda_pi_Pi_factor`, `bulk_dt_coeff`.
+parity with the 1-D model): `diffusion_drive`, `diff_dt_coeff`, `shear_dt_coeff`, `bulk_dt_coeff`.
 
 **The driver**
 
@@ -137,17 +139,20 @@ the work array, and a restart without it drops the $\partial_\tau$ pieces of the
 ## 3. Switching individual terms off
 
 Whole sectors switch with the `enable_*` / `consistent_*` flags, and a few medium terms with the knobs
-above. Inside the two charm closures every term has its own switch:
+above. Every other term has its own switch in the shared register `Terms` (`src/terms.jl`, the same one
+the 1+1D solvers use; `Terms2D` is its alias here). The interface is one screen, in `README.md` §3:
 
 ```julia
 m = H.build_model_2d(; enable_diff = true, kappa_coeff = 0.1163,
                        consistent_fm = true, consistent_m2 = true,
                        terms = (fm_inertial = false, m2_vorticity = true))
+m = H.build_model_2d(; …, terms = :homogeneous)                       # a homogeneous medium at rest
+m = H.build_model_2d(; …, terms = H.without(:vorticity, :acceleration)) # drop by physical ingredient
 H.show_equations(m)
 ```
 
 `show_equations` prints every equation with each term marked `[x]` or `[ ]` and the knob that
-controls it. The seventeen switches:
+controls it; `show_terms()` prints the register with each term's ingredients. The switches:
 
 | first moment | second moment |
 |---|---|
@@ -157,11 +162,19 @@ controls it. The seventeen switches:
 | `fm_nu_gradu` — $\tau_n\nu^m\nabla_m u^i$ | `m2_expansion`, `m2_pi_sigma`, `m2_PiQ_sigma` — class (iii) |
 | `fm_expansion` — $\tau_n\theta\nu^i$ | `m2_vorticity` — **off by default**, class (iii) |
 | `fm_dlnh` — $(D_s/T)h'DT\,\nu^i$ | `m2_projector` — the Δ-projector on $D\pi_Q$ |
-| | `m2_accel_nu`, `m2_nu_gradTh` — class (iv) |
+| **medium:** `shear_vorticity` — $2\tau_\pi\pi^{\lambda\langle i}\omega_\lambda{}^{j\rangle}$, **off by default** | `m2_accel_nu`, `m2_nu_gradTh` — class (iv) |
 
-A switch whose sector is off is **refused**, not ignored, and so is a misspelled name. Defaults are the
-equations as they stand; switching a term off reproduces the arithmetic without it bit for bit (gate
-Gt). What each term is worth on a fireball: example 06.
+A switch NAMED in a sector that is off is **refused**, not ignored, and so is a misspelled name; a change that
+comes from a preset or an ingredient in an off sector is inert and reset. Defaults are the equations as they
+stand; switching a term off reproduces the arithmetic without it bit for bit (gate Gt). `terms = :homogeneous`
+with `consistent_fm = true` reproduces `consistent_fm = false` bit for bit (Gt7). What each term is worth on a
+fireball: example 06.
+
+**The medium's vorticity coupling** (`shear_vorticity`, added 2026-09-11) is the medium twin of `m2_vorticity`:
+the same function, `vorticity_coupling_2d`, with τ_π for τ_M — the antisymmetric half of the kinematic
+contraction the Boltzmann streaming term produces, with a fixed coefficient (DNMR's $+2\tau_\pi\pi_\lambda^{\langle\mu}\omega^{\nu\rangle\lambda}$).
+Gt8: inert on a round fireball (to the O(h²) vorticity a Cartesian stencil manufactures), acts on a swirling
+one (795× more), and only rotates π ($\pi_{\mu\nu}X^{\mu\nu} = 0$ to 5e-15). Fluidum does not carry it; off by default.
 
 ---
 
@@ -192,7 +205,7 @@ performance pass — the whole set now runs in under 5 minutes. The suite runs t
 ## 5. Validation
 
 ```sh
-julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run2d_gates.jl           # 21 gates, ~30 min
+julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run2d_gates.jl           # 22 gates, ~35 min
 FIVO2D_TIER=fast julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run2d_gates.jl   # 6 gates, ~30 s, in CI
 ```
 
@@ -205,7 +218,8 @@ missing counts as a failure. Run the full ladder after touching `src2d/` or `mai
 | recovery | `test_primrec2d.jl`, `test_primrec2d_vs_1d.jl` | round trips; the 1-D recovery on the production locus |
 | **Gc** first moment | `test_consistent_fm2d.jl` | the 1-D source bit for bit; rotation; Bjorken; **Gc7: the sign, on a solve** |
 | **Gm** second moment | `test_consistent_m22d.jl` | the 1-D reduction (4e-16, with the moving projection); rotation; trace; Bjorken |
-| **Gt** term switches | `test_terms2d.jl` | every switch wired and additive; the vorticity coupling vs brute-force index algebra |
+| **Gd** DNMR couplings | `test_dnmr2d.jl` | the 0+1D DNMR ODEs (Richardson-extrapolated), wrong-sign referees, the 1-D solver, and the π·σ contractions vs brute force |
+| **Gt** term switches | `test_terms2d.jl` | every switch wired and additive; the vorticity coupling vs brute-force index algebra; Gt7 presets/`without` and `:homogeneous` ≡ shipped on a solve; Gt8 the medium vorticity coupling |
 | G0, G0b | `test_bjorken2d.jl`, `test_bjorken_bulk2d.jl` | Bjorken, ideal and viscous (order 2.00) |
 | G1, G1v | `test_gubser2d.jl`, `test_gubser_viscous2d.jl` | Gubser flow, analytic and semi-analytic (order 1.96) |
 | Gs | `test_sound2d.jl` | sound speed and viscous attenuation |
@@ -220,6 +234,7 @@ Outside this package, in `Julia/Projects/FiVoFluidumComparison/`:
 | `gate_2p1d_viscous.jl` | medium viscous rows vs a referee that is neither code (1e-11); commit-level in `programme.jl check` |
 | `gate_transverse_fm.jl` | the transverse first moment vs a closed form, **both codes** (FiVo 0.37 %, Fluidum 2.5e-6); commit-level |
 | `gate_2p1d_m2.jl` | second-moment rows, FiVo vs Fluidum at identical states |
+| `test/test_diffusion_mode.jl` (X1, the 1-D ladder) | the charm current on a radial diffusion mode: **this solver, the 1-D bulk solver and the 1-D IS2 solver** against one closed-form referee, four term configurations |
 | `COMPARISON_2P1D.md` | the solve-vs-solve record (a real Pb+Pb event to freeze-out, §37) |
 
 ---
@@ -262,7 +277,8 @@ warning.
 |---|---|
 | **2-D `consistent_fm` results before 2026-09-10 are wrong** | every consistent term had the wrong sign (EQUATIONS2D §10) |
 | the charm second moment lacked its projector term before 2026-09-10 | 0.02–0.6 % of the rate; `terms = (m2_projector = false,)` reproduces the old rows. Fluidum's twin still lacks it |
-| the vorticity coupling is off by default | up to 12 % of the σ coupling in the worst cells of a lumpy event; neither code carried it before |
+| the vorticity couplings are off by default | `m2_vorticity`: up to 12 % of the σ coupling in the worst cells of a lumpy event; neither code carried it before. `shear_vorticity` (the medium's, 2026-09-11): not carried by Fluidum |
+| the medium's DNMR couplings τ_ππ, λ_πΠ, δ_ΠΠ, λ_Ππ | default 0; wired since 2026-09-11 with the 1+1D solver's equations and signs (gate Gd). Only δ_ππ is set by the production callers |
 | first order in time once anything dissipative is on | the operator split; halve `CFLτ` to check |
 | the dilute edge | the vacuum ramp throttles the charge sector below $n = 2\cdot10^{-3}$ fm⁻³, which reaches above $T_{\rm fo}$; quote dissipative fields from $T > T_{\rm fo}$ only |
 | no diffusive signal speed in the CFL | `wavespeeds_2d` bounds the HLLE fan by the sound speed. COMPARISON_2P1D §28 measured `\|ν\|/n` climbing to 0.93 at the edge with `consistent_fm` on — but under the wrong sign, whose expansion term anti-damped the current. Not re-measured since the fix |

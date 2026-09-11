@@ -298,8 +298,25 @@ function _cons_to_prim_ideal_phi0_y0_nocharge!(w::PrimRecWork,
 
     y_sol = best_y
     f_sol = best_f
+    # 🔴 2026-09-11. The bisection gets its OWN iteration budget, not the caller's
+    # Newton `maxit`. The bracket starts (log T_SOLVE_MAX − log T_MIN)/64 ≈ 0.76 wide
+    # and halving it to float resolution takes ~55 steps; `relax_dissipative!` passes
+    # maxit = 40, which stops at a width of ~7e-13 in log T — a residual of ~8e-11 on
+    # E ~ 40, above tolF ~ 4e-13 — so a CORRECT root was reported as a failure, and
+    # the relaxation's fail-safe then zeroed Π and π in that cell. Only charge-free
+    # EOSs at exactly zero velocity reach this branch (the production EOS carries
+    # charm and takes the Newton path), i.e. every uniform baryonless Bjorken run:
+    # there π was zeroed on every other step, the viscous heating came out 4× too
+    # small (1.1 % vs 4.1 %), and FiVoBenchmark's bench_bjorken still PASSED at 5 %.
+    # A sign change across ADJACENT floats is a root located to machine precision,
+    # so a collapsed bracket is converged by definition (`collapsed` below).
+    collapsed = false
     if bracket_found
-        for it in 1:maxit
+        for it in 1:max(maxit, 200)
+            if y_right - y_left <= 4 * eps(max(abs(y_left), abs(y_right)))
+                collapsed = true
+                break
+            end
             y_mid = 0.5 * (y_left + y_right)
             eval_y0!(y_mid)
             if !(isfinite(F2[]) && isfinite(F3[]))
@@ -326,13 +343,14 @@ function _cons_to_prim_ideal_phi0_y0_nocharge!(w::PrimRecWork,
         end
     end
 
-    w.last_reason = abs(f_sol) < tolF ? PRR_CONVERGED : PRR_RESIDUAL_TOO_LARGE
+    conv = abs(f_sol) < tolF || collapsed
+    w.last_reason = conv ? PRR_CONVERGED : PRR_RESIDUAL_TOO_LARGE
     w.last_iters = bracket_found ? maxit : 0
     w.last_resnorm = abs(f_sol)
     T = clamp(exp(y_sol), T_MIN, T_SOLVE_MAX)
     μ = hq_mass(eos)
     P, _, e = eos_Pne(T, μ, eos)
-    return (T, μ, 0.0, 0.0, max(e, 0.0), P, abs(f_sol) < tolF)
+    return (T, μ, 0.0, 0.0, max(e, 0.0), P, conv)
 end
 
 function cons_to_prim_ideal_phi0_nocharge!(w::PrimRecWork,
