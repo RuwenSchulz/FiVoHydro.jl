@@ -167,9 +167,15 @@ Measured identical to FiVo's 1-D closed form
 Bessel identities of each other (gate C0 of converge_1p1d_consistent.jl). Tying
 them to τ_n rather than rebuilding from D_s is what keeps the ratio τ_M/τ_n
 correct if τ_n's normalisation is ever audited again.
+
+`m` is the charm mass in `z = m/T`. It was HARDCODED to 1.5 GeV here until
+2026-09-10 while every other Bessel ratio of the second moment took the model's
+mass — so `transport_mass ≠ 1.5` moved A/B, dln C/dln T and λ_a but not τ_M. The
+solver now passes its transport mass; the default keeps the two-argument form
+(used by the comparison harnesses) at the production 1.5 GeV, bit-identically.
 """
-@inline function tauM_charm_2d(T::Float64, τn::Float64)
-    Tm = max(T, T_MIN); z = 1.5 / Tm
+@inline function tauM_charm_2d(T::Float64, τn::Float64, m::Float64 = 1.5)
+    Tm = max(T, T_MIN); z = m / Tm
     K2 = SpecialFunctions.besselkx(2, z); K3 = SpecialFunctions.besselkx(3, z)
     K4 = SpecialFunctions.besselkx(4, z)
     abs(K3) <= TINY && return 0.0

@@ -12,3 +12,8 @@ debug_primfail/
 # physics_scans.jl, plot2d_evolution.jl, exotic_ic2d.jl, flow_two_systems.jl, plot_gubser2d.jl)
 plots2d/
 !plots2d/flow_two_systems_scan.csv
+
+# example ANIMATIONS (examples 07-09). Regenerable by rerunning the example, and a few MB each —
+# this package untracked 6.9 MB of figures on 2026-09-08 for the same reason. The static PNGs in
+# examples2d/figures/ ARE tracked; only the gifs are not.
+examples2d/figures/anim/

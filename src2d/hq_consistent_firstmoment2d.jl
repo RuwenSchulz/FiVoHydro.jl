@@ -79,16 +79,28 @@
 # coefficients.
 #
 # -----------------------------------------------------------------------------
+# SIGN CONVENTION — read this before calling the function
+# -----------------------------------------------------------------------------
+# `consistent_fm_source_2d` returns `s^i` SOURCE-ON-THE-LHS:
+#
+#     τ_n Δ^i_ν Dν^ν + ν^i + κ∇^⟨i⟩α + s^i = 0 ,
+#
+# as the 1-D `hq_consistent_extras` and Fluidum's generated 2-D row do. The
+# relaxation integrates the right-hand side, so it SUBTRACTS s. It added it until
+# 2026-09-10 — see the docstring and the call site in dissipation2d.jl.
+#
+# -----------------------------------------------------------------------------
 # WHAT IS NOT HERE
 # -----------------------------------------------------------------------------
 # The c_M second-moment back-coupling (`hq_cm_force` in the 1-D file) has NO 2-D
-# counterpart, because the 2-D solver has no second-moment sector: there is no
-# π_Q, no Π_Q, nothing to couple back. The consistent projection corrects the
-# FIRST moment only, which is the whole of what the 2-D charge sector carries.
+# counterpart. When this file was written the 2-D solver had no second-moment
+# sector at all; since 2026-09-08 it has one (src2d/hq_consistent_m2_2d.jl,
+# `consistent_m2`), but it is PASSIVE — c_M = 0, nothing couples back into ν.
 # In O+O production the back-coupling is off (`use_cM = 0`) in any case.
 #
 # FLAG: `IdealDiffVisc2DModel.consistent_fm`, default `false` = the shipped
 # ∇α-only drive, byte-identical to every 2-D number produced before this file.
+# Each of the four terms can be switched off on its own: `Terms2D` (terms2d.jl).
 # =============================================================================
 
 """
@@ -175,8 +187,23 @@ end
                             θ, ax, ay, dxux, dxuy, dyux, dyuy) -> (sx, sy)
 
 The consistent first-moment sources as a transverse vector `(s^x, s^y)`, in the
-same sign convention as `ns_diffusion_target_2d`: ADD to the numerator of the
-ν relaxation update, beside `ν_NS`.
+SOURCE-ON-THE-LHS convention of the row they come from,
+
+    τ_n Δ^i_ν Dν^ν + ν^i + κ∇^⟨i⟩α + s^i = 0 ,
+
+the same convention as the 1-D `hq_consistent_extras` and Fluidum's
+`hq2d_matrices_consistent`, which is what lets gate Gc1 compare the two bit for
+bit. The relaxation update (`relax_dissipative_2d!`) works with the RIGHT-hand
+side, `ν_NS − s`, so it SUBTRACTS this.
+
+⚠ CORRECTED 2026-09-10. This docstring said "the same sign convention as
+`ns_diffusion_target_2d`: ADD to the numerator … beside `ν_NS`", and the solver
+did exactly that for two days: every consistent term entered with the wrong sign
+(the expansion term anti-damped the current; the at-rest T drive pointed up the
+temperature gradient). The VALUE returned here was always right — every gate
+that compares it at a fixed state passed — the SIDE it was put on was not.
+Gate Gc7 evolves a Bjorken state and catches the sign; see the note at the call
+site.
 
 Four additive pieces, not five: the wls's "geometric dilution" is not a separate
 contribution here, it is inside the full divergence θ (see the header).
@@ -195,7 +222,8 @@ projected-derivative correction a few lines below the call site.
                                          τn::Float64, Ds::Float64, h::Float64, hp::Float64,
                                          θ::Float64, ax::Float64, ay::Float64,
                                          dxux::Float64, dxuy::Float64,
-                                         dyux::Float64, dyuy::Float64)
+                                         dyux::Float64, dyuy::Float64;
+                                         terms::Terms2D = Terms2D())
     Tm = max(T, T_MIN)
 
     # D T = u^m ∂_m T
@@ -231,10 +259,24 @@ projected-derivative correction a few lines below the call site.
     # piece (u^τ/τ here; u^τ/τ + u^r/r in radial coordinates). Adding a separate
     # dilution on top double-counts it: measured, that is a 12-25 % error against
     # the 1-D reference, which is what gate Gc1 caught.
-    br = τn*θ + (Ds/Tm)*hp*DT
+    #
+    # The four terms, each behind its `Terms2D` switch. Written `on ? term : 0.0`
+    # so that with every switch on this is the same arithmetic, in the same order,
+    # as before the switches existed (bit-identical; checked by the regression
+    # harness and gate Gt6).
+    t = terms
+    expansion = t.fm_expansion ? τn*θ             : 0.0     # τ_n θ           (× ν^i)
+    dlnh      = t.fm_dlnh      ? (Ds/Tm)*hp*DT    : 0.0     # (D_s/T) h′ DT   (× ν^i)
+    br = expansion + dlnh
 
-    pref = (Ds/Tm) * (n + Tm*dn_dT)
-    sx = pref*gTx + τn*n*ax + τn*ngux + nux*br
-    sy = pref*gTy + τn*n*ay + τn*nguy + nuy*br
+    pref = (Ds/Tm) * (n + Tm*dn_dT)                         # = (D_s/T) n h/T
+    sx = (t.fm_gradT     ? pref*gTx : 0.0) +                # (D_s/T)(n + T∂n/∂T) ∇^⟨x⟩T
+         (t.fm_inertial  ? τn*n*ax  : 0.0) +                # τ_n n a^x
+         (t.fm_nu_gradu  ? τn*ngux  : 0.0) +                # τ_n ν^m∇_m u^x
+         nux*br                                             # ν^x (τ_n θ + (D_s/T) h′ DT)
+    sy = (t.fm_gradT     ? pref*gTy : 0.0) +
+         (t.fm_inertial  ? τn*n*ay  : 0.0) +
+         (t.fm_nu_gradu  ? τn*nguy  : 0.0) +
+         nuy*br
     return sx, sy
 end

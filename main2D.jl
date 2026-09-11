@@ -41,7 +41,9 @@ include(joinpath(_SRC, "relaxation_laws.jl"))
 include(joinpath(_SRC2D, "grid2d.jl"))
 include(joinpath(_SRC2D, "shear2d.jl"))
 include(joinpath(_SRC2D, "state_layout2d.jl"))
+include(joinpath(_SRC2D, "terms2d.jl"))          # Terms2D — before the model that carries it
 include(joinpath(_SRC2D, "primitives2d.jl"))
+include(joinpath(_SRC2D, "bessel2d.jl"))       # fast K₂ for the 2-D EOS (before primrec2d)
 include(joinpath(_SRC2D, "primrec2d.jl"))
 include(joinpath(_SRC2D, "work2d.jl"))
 include(joinpath(_SRC2D, "fluxes2d.jl"))
@@ -56,17 +58,24 @@ include(joinpath(_SRC2D, "floors2d.jl"))
 include(joinpath(_SRC2D, "timestepper2d.jl"))
 
 export make_grid2d, make_layout2d, build_model_2d, allocate_state,
-       initialize_uniform!, run_sim_2d!, LatticeHRGEOS, ConformalHQEOS
+       initialize_uniform!, run_sim_2d!, LatticeHRGEOS, ConformalHQEOS,
+       Terms2D, show_equations, fields_2d
 
 # ------------------------------------------------------------------------------
 # Model / state construction
 # ------------------------------------------------------------------------------
 
 """
-    build_model_2d(; eos, enable_shear=false, enable_bulk=false, enable_diff=false, kwargs...)
+    build_model_2d(; eos, enable_shear=false, enable_bulk=false, enable_diff=false,
+                     terms=Terms2D(), kwargs...)
 
 Assemble the model with a layout matching the enabled sectors. Defaults reproduce
 the BARE scheme (ideal fluid, no stabilizers), mirroring main.jl's kwarg defaults.
+
+Every other field of `IdealDiffVisc2DModel` can be passed as a keyword (README2D.md
+lists them). `terms` switches individual terms of the charm sector and takes a
+`Terms2D` or a `NamedTuple`, e.g. `terms = (fm_inertial = false,)`; see
+`src2d/terms2d.jl`. `show_equations(model)` prints what the result integrates.
 """
 function build_model_2d(; eos = LatticeHRGEOS(),
                           r_domain::Float64 = Inf,
@@ -97,7 +106,8 @@ function build_model_2d(; eos = LatticeHRGEOS(),
                                enable_bulk  = enable_bulk,  bulk  = bu,
                                enable_diff  = enable_diff,
                                E_vac_cut = Evac, r_domain = r_domain,
-                               filter(p -> p.first !== :E_vac_cut, kwargs)...)
+                               terms = terms2d(get(kwargs, :terms, Terms2D())),
+                               filter(p -> !(p.first in (:E_vac_cut, :terms)), kwargs)...)
     reject_unwired_knobs_2d(m)   # see primitives2d.jl — eight 1-D knobs the 2-D solver never reads
     return m
 end
@@ -183,7 +193,7 @@ function initialize_from_radial!(U::AbstractMatrix, g::Grid2D, model::IdealDiffV
 end
 
 """
-    initialize_from_grid_csv!(U, g, model, τ0, csv; taper_width=1.0)
+    initialize_from_grid_csv!(U, g, model, τ0, csv; taper_width=1.0, smooth_fm=0.0)
 
 Seed from a genuinely 2-D initial condition: a CSV of `x,y,T0,alpha0` on a uniform
 grid, as written by `Julia/Projects/ALICE_IC_Creation/BuildIC2D.jl`.
@@ -196,13 +206,29 @@ vectors instead, so this file carries real ε₂.
 Bilinear interpolation onto the solver grid; outside the file's extent the state
 is vacuum, tapered over `taper_width` so the edge is not a step.
 
+`smooth_fm > 0` blurs the FILE's `T` and `α` grids with a Gaussian of that width in
+fm before interpolating (separable, normalised, edge-clamped; default 0 = off, and
+then this function is byte-for-byte what it was). A real MC-Glauber event carries
+sub-nucleon structure — `BuildIC2D.jl` deposits `W = 0.5 fm` sources — that a grid
+of dx ≳ 0.2 fm does not resolve, and an unresolved hot spot is what drives the
+shear past |π| ~ P and puts the run on the regulators (TWOD_PROGRAM.md §6j; gate G9
+sets `pi_clip_factor` for exactly this reason). A mild blur, σ ≈ 0.3-0.6 fm, is the
+cheaper half of that fix.
+
+⚠ It smooths T and α AS GIVEN, which is not the same as smoothing the entropy or
+energy density the event was built from: T ↦ ⟨T⟩ lowers the peak less than
+e ↦ ⟨e⟩ would (e ~ T⁴ here). At these widths it is a regularisation of structure
+the grid cannot carry, not a physics model of the initial state — and example 07
+measures what it costs in ε₂, ε₃ and the flow response.
+
 Returns `(; nbad, nvacuum)` — cells that had matter and still failed, versus cells
 that were legitimately vacuum. Keeping those separate matters: a ±14 fm IC in a
 ±20 fm box makes ~65% of the grid vacuum.
 """
 function initialize_from_grid_csv!(U::AbstractMatrix, g::Grid2D,
                                    model::IdealDiffVisc2DModel, τ0::Float64,
-                                   csv::AbstractString; taper_width::Float64 = 1.0)
+                                   csv::AbstractString; taper_width::Float64 = 1.0,
+                                   smooth_fm::Float64 = 0.0)
     raw = readdlm(csv, ','; skipstart = 1)
     xs = sort(unique(Float64.(raw[:,1])))
     ys = sort(unique(Float64.(raw[:,2])))
@@ -214,6 +240,37 @@ function initialize_from_grid_csv!(U::AbstractMatrix, g::Grid2D,
         ix = round(Int, (Float64(raw[row,1]) - xs[1])/dx) + 1
         iy = round(Int, (Float64(raw[row,2]) - ys[1])/dy) + 1
         Tg[ix,iy] = Float64(raw[row,3]); Ag[ix,iy] = Float64(raw[row,4])
+    end
+
+    # optional Gaussian blur of the FILE grid (see the docstring); separable, so two
+    # 1-D passes, and the kernel is normalised over the samples that exist, which
+    # clamps at the edges rather than pulling vacuum in.
+    if smooth_fm > 0.0
+        σx = smooth_fm/dx; radx = max(1, ceil(Int, 3σx))
+        σy = smooth_fm/dy; rady = max(1, ceil(Int, 3σy))
+        wx = [exp(-0.5*(k/σx)^2) for k in -radx:radx]
+        wy = [exp(-0.5*(k/σy)^2) for k in -rady:rady]
+        for A in (Tg, Ag)
+            B = similar(A)
+            for j in 1:ny, i in 1:nx                    # x pass, kernel in units of dx
+                acc = 0.0; wsum = 0.0
+                for (kk, k) in enumerate(-radx:radx)
+                    ii = i + k
+                    (1 <= ii <= nx) || continue
+                    acc += wx[kk]*A[ii,j]; wsum += wx[kk]
+                end
+                B[i,j] = acc/wsum
+            end
+            for j in 1:ny, i in 1:nx                    # y pass, kernel in units of dy
+                acc = 0.0; wsum = 0.0
+                for (kk, k) in enumerate(-rady:rady)
+                    jj = j + k
+                    (1 <= jj <= ny) || continue
+                    acc += wy[kk]*B[i,jj]; wsum += wy[kk]
+                end
+                A[i,j] = acc/wsum
+            end
+        end
     end
 
     xlo, xhi = xs[1], xs[end]; ylo, yhi = ys[1], ys[end]
@@ -491,6 +548,45 @@ function run_sim_2d!(U::AbstractMatrix, g::Grid2D, model::IdealDiffVisc2DModel;
     return (ok = true, τ = τ, nsteps = nsteps, nprimfail = nprimfail,
             nvacuum = nvacuum, max_shear_res = max_shear_res, work = wk,
             maxu = maxu, dQ = dQ, Q0 = Qin, Q1 = Qout, minPtot = minPtot)
+end
+
+# ------------------------------------------------------------------------------
+# Readout
+# ------------------------------------------------------------------------------
+
+"""
+    fields_2d(g, U, work, model) -> NamedTuple
+
+The state on the interior cells as ordinary `Nx × Ny` matrices indexed `[ix, iy]`
+(x first), plus the cell centres `x`, `y`:
+
+    T, mu, alpha, n, e, P, ux, uy          primitives   (GeV, fm⁻³, GeV fm⁻³)
+    nux, nuy                               charge current        — if `with_charge`
+    Pi                                     bulk                  — if `enable_bulk`
+    pixx, pixy, piyy, pieta                shear (pieta = π^η_η) — if `enable_shear`
+    pQxx, pQxy, pQyy, pQeta, PiQ           charm second moment   — if `consistent_m2`
+
+Dissipative fields are in PHYSICAL units. `work` is the one the primitives live
+in: `res.work` after `run_sim_2d!`, or the third argument of an `on_dump`
+callback. The primitives are those of the last recovery, taken before the final
+relaxation substep — the same values every diagnostic in the ladder reads.
+
+    res = run_sim_2d!(U, g, m; τ0 = 0.4, τfinal = 2.0)
+    f = fields_2d(g, U, res.work, m)
+    heatmap(f.x, f.y, permutedims(f.T))      # heatmap wants [iy, ix]
+"""
+function fields_2d(g::Grid2D, U::AbstractMatrix, work::Work2D, model::IdealDiffVisc2DModel)
+    L = model.layout; ng = g.nghost
+    ixs = (ng+1):(ng+g.Nx); iys = (ng+1):(ng+g.Ny)
+    grab(f) = [f(lin(g, ix, iy)) for ix in ixs, iy in iys]
+    prim = (x = g.xC[ixs], y = g.yC[iys],
+            T  = grab(i -> exp(work.yT[i])), mu = grab(i -> work.mu[i]),
+            alpha = grab(i -> work.alpha[i]), n = grab(i -> work.n[i]),
+            e  = grab(i -> work.e[i]),  P  = grab(i -> work.P[i]),
+            ux = grab(i -> work.ux[i]), uy = grab(i -> work.uy[i]))
+    # every stored dissipative field, by its layout name (the conserved four come first)
+    diss = [s => grab(i -> phys_from_stored(U[L.idx[s], i])) for s in L.names[5:end]]
+    return merge(prim, NamedTuple(diss))
 end
 
 end # module

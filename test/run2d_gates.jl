@@ -15,8 +15,12 @@ using Printf
 const HERE = @__DIR__
 const PROJ = normpath(joinpath(HERE, ".."))
 
-# FIVO2D_TIER=fast runs only the gates marked `true` below: pure algebra and primitive recovery,
-# no time evolution, ~11 s in total. That is the tier CI runs on every push
+# FIVO2D_TIER=fast runs only the gates marked `true` below: algebra, primitive recovery and the
+# charm closures, ~30 s in total (measured 2026-09-10, six gates). Three of them take a few
+# short solves — Gc5/Gm5 (the flags are inert when off), Gc7 (the first moment's SIGN on a
+# Bjorken solve, which no algebraic gate can see) and Gt6 (the term switches act on a solve) —
+# so "no time evolution", which this said until 2026-09-10, is no longer true of the tier; it
+# still exercises no fluxes on a physical IC and no regulators. That is the tier CI runs on every push
 # (.github/workflows/ci.yml) — the full ladder does real 2-D solves and takes tens of minutes,
 # which is why it stayed out of CI entirely until 2026-09-08. `fast` is a smoke test, NOT the
 # validation ladder: it cannot see anything the timestepper, the fluxes or the regulators do.
@@ -31,6 +35,7 @@ const GATES = [
     ("recovery vs 1-D on production locus","test_primrec2d_vs_1d.jl",         true),
     ("Gc  consistent first moment",        "test_consistent_fm2d.jl",         true),
     ("Gm  consistent second moment",       "test_consistent_m22d.jl",         true),
+    ("Gt  per-term switches + vorticity",  "test_terms2d.jl",                 true),
     ("G0  Bjorken",                        "test_bjorken2d.jl", false),
     ("G0b Bjorken + nonlinear bulk",       "test_bjorken_bulk2d.jl", false),
     ("G1  Gubser (analytic 2-D)",           "test_gubser2d.jl", false),

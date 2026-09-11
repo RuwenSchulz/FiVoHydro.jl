@@ -27,7 +27,9 @@ include(joinpath(_ROOT, "src", "eos.jl"))
 include(joinpath(_ROOT, "src", "primitives.jl"))   # dimension-agnostic transport models
 include(joinpath(_ROOT, "src2d", "shear2d.jl"))
 include(joinpath(_ROOT, "src2d", "state_layout2d.jl"))
+include(joinpath(_ROOT, "src2d", "terms2d.jl"))       # Terms2D, carried by the model
 include(joinpath(_ROOT, "src2d", "primitives2d.jl"))
+include(joinpath(_ROOT, "src2d", "bessel2d.jl"))      # fast K₂, needed by primrec2d.jl
 include(joinpath(_ROOT, "src2d", "primrec2d.jl"))
 
 const RNG = MersenneTwister(20260901)
@@ -186,5 +188,57 @@ end
         @printf("  zero-flow cell: T err %.3e, |u| = %.3e\n", abs(T2-0.30)/0.30, hypot(ux2,uy2))
         @test abs(T2 - 0.30)/0.30 < 1e-10
         @test hypot(ux2, uy2) < 1e-12
+    end
+
+    # ── the 2-D equation of state (2026-09-11) ───────────────────────────────────
+    # `eos_Pne_2d` is a copy of `eos_Pne`'s arithmetic (src/eos.jl, shared with the
+    # 1-D production solver, is not touched) with a fast K₂ and a T-keyed memo. This
+    # is what keeps the copy honest: if src/eos.jl changes, these fail.
+    @testset "2-D EOS: fast K₂, the copy of eos_Pne, and the memo" begin
+        eos = LatticeHRGEOS()
+        # (a) the vendored Bessel against SpecialFunctions (Amos)
+        worst = 0.0
+        for x in exp.(range(log(0.1), log(BESSELKX_ASYM_X*0.999); length = 20_000))
+            worst = max(worst, abs(safe_besselk2x_2d(x)/SpecialFunctions.besselkx(2, x) - 1))
+        end
+        @printf("  K₂: max rel diff vs SpecialFunctions over x ∈ [0.1, 1e4] = %.2e\n", worst)
+        @test worst < 5e-15
+        # the asymptotic regime (vacuum, floors) is the SAME code path, bit for bit
+        @test all(safe_besselk2x_2d(x) == safe_besselkx(2, x) for x in (1e4, 3.7e5, 1.5e20))
+        @test safe_besselk2x_2d(0.0) == 0.0 && safe_besselk2x_2d(NaN) == 0.0
+
+        # (b) eos_Pne_2d vs eos_Pne: P and e bit for bit, n to round-off
+        wn = 0.0; nbitP = 0; nbitE = 0; ntot = 0
+        for T in vcat(exp.(range(log(1e-3), log(5.0); length = 400)), [T_MIN, 1e-12, 0.1565]),
+            α in (-40.0, -4.2, 0.0, 3.0)
+            P1, n1, e1 = eos_Pne(T, hq_mass(eos) + T*α, eos)
+            P2, n2, e2 = eos_Pne_2d(T, hq_mass(eos) + T*α, eos)
+            ntot += 1
+            nbitP += (P1 === P2); nbitE += (e1 === e2)
+            n1 > 0 && (wn = max(wn, abs(n2/n1 - 1)))
+            n1 == 0 && @test n2 == 0
+        end
+        @printf("  EOS: P bitwise %d/%d, e bitwise %d/%d, n max rel diff %.2e\n",
+                nbitP, ntot, nbitE, ntot, wn)
+        @test nbitP == ntot && nbitE == ntot
+        @test wn < 1e-14
+        @test all(eos_Pe_2d(T, 1.0, eos) === (eos_Pne(T, 1.0, eos)[1], eos_Pne(T, 1.0, eos)[3])
+                  for T in (T_MIN, 0.01, 0.2, 0.6, 3.0))
+
+        # (c) the memo returns exactly what the uncached call returns, hits and misses
+        c = EOSCache2D(); nsame = 0; nq = 0
+        rng = MersenneTwister(5)
+        Ts = [0.12 + 0.5rand(rng) for _ in 1:7]
+        for rep in 1:3, T in Ts, α in (-5.0, -1.0, 2.0)      # 7 distinct T > 4 slots: evictions too
+            nq += 1
+            nsame += (eos_Pne_2d(T, hq_mass(eos) + T*α, eos, c) ===
+                      eos_Pne_2d(T, hq_mass(eos) + T*α, eos))
+        end
+        @test nsame == nq
+        reset_eos_cache_2d!(c); @test all(isnan, c.T)
+        # a different EOS type never touches the memo
+        ceos = ConformalHQEOS()
+        @test eos_Pne_2d(0.3, 1.2, ceos, c) === eos_Pne(0.3, 1.2, ceos)
+        @printf("  memo: %d/%d cached evaluations bit-identical to uncached\n", nsame, nq)
     end
 end

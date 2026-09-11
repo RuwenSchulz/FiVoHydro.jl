@@ -233,9 +233,14 @@ gate can hand both codes identical data.
                                          dyux::Float64, dyuy::Float64,
                                          n::Float64, τn::Float64, Ds::Float64,
                                          h::Float64, hp::Float64,
-                                         τM::Float64, ηM::Float64, m::Float64)
+                                         τM::Float64, ηM::Float64, m::Float64;
+                                         terms::Terms2D = Terms2D())
     Tm = max(T, T_MIN)
-    (τM > 0.0) || return (0.0, 0.0, 0.0, 0.0)
+    # Five values on EVERY path. This returned four here until 2026-09-10 — a
+    # caller destructuring five would throw, and inference saw a Union. Unreachable
+    # from the solver (it tests τ_M > 0 first), reachable from any harness.
+    (τM > 0.0) || return (0.0, 0.0, 0.0, 0.0, 0.0)
+    t = terms
 
     ηQ = ηM
     ζQ = (5.0 / 3.0) * ηQ
@@ -263,7 +268,7 @@ gate can hand both codes identical data.
     DlnT = DT / Tm
     DlnC = cf.dlnC_dlnT * DlnT
     Dα   = uτ*dtα + ux*dxα + uy*dyα
-    geo  = τM * ((5.0/3.0)*θ + DlnC)
+    geo  = t.m2_expansion ? τM * ((5.0/3.0)*θ + DlnC) : 0.0     # class (iii) expansion
 
     # π:σ = π_{μν}σ^{μν}, with BOTH indices lowered by the metric.
     # ⚠ NOT `pxx σxx + 2 pxy σxy + pyy σyy + peta σeta`. The stored components are
@@ -295,34 +300,152 @@ gate can hand both codes identical data.
     gTy = (h + Tm*hp) * (dyT + uy*DT)
     qa_xx, qa_xy, qa_yy = rank1_traceless_2d(ax, ay, νx, νy, ux, uy, uτ)
     qg_xx, qg_xy, qg_yy = rank1_traceless_2d(νx, νy, gTx, gTy, ux, uy, uτ)
-    q_xx = 2*cf.λa*qa_xx + (Ds/Tm)*qg_xx
-    q_yy = 2*cf.λa*qa_yy + (Ds/Tm)*qg_yy
-    q_xy = 2*cf.λa*qa_xy + (Ds/Tm)*qg_xy
+    ia = t.m2_accel_nu;  ig = t.m2_nu_gradTh
+    q_xx = (ia ? 2*cf.λa*qa_xx : 0.0) + (ig ? (Ds/Tm)*qg_xx : 0.0)
+    q_yy = (ia ? 2*cf.λa*qa_yy : 0.0) + (ig ? (Ds/Tm)*qg_yy : 0.0)
+    q_xy = (ia ? 2*cf.λa*qa_xy : 0.0) + (ig ? (Ds/Tm)*qg_xy : 0.0)
 
-    # ── the traceless LHS sources ────────────────────────────────────────────
-    sxx = pxx + 2*ηQ*sνxx + geo*pxx +
-          2*τM*(c_xx - (1 + ux*ux)*πσ/3) + 2*τM*PiQ*σxx +
-          2*cf.ηbar*σxx + q_xx
-    syy = pyy + 2*ηQ*sνyy + geo*pyy +
-          2*τM*(c_yy - (1 + uy*uy)*πσ/3) + 2*τM*PiQ*σyy +
-          2*cf.ηbar*σyy + q_yy
-    sxy = pxy + 2*ηQ*sνxy + geo*pxy +
-          2*τM*(c_xy - (ux*uy)*πσ/3) + 2*τM*PiQ*σxy +
-          2*cf.ηbar*σxy + q_xy
+    # ── the traceless LHS sources, one named term per line ───────────────────
+    # Each term sits behind its `Terms2D` switch as `on ? term : 0.0`, in the
+    # order the expression had before the switches existed, so the all-on
+    # arithmetic is bit-identical. `geo` is already zero when m2_expansion is off.
+    i1 = t.m2_nu_gradient; i2 = t.m2_bg_gradu; i3 = t.m2_pi_sigma; i4 = t.m2_PiQ_sigma
+    sxx = pxx +                                                   # relaxation
+          (i1 ? 2*ηQ*sνxx : 0.0) +                                # (i)   2η_Q σ_(ν)
+          geo*pxx +                                               # (iii) expansion
+          (i3 ? 2*τM*(c_xx - (1 + ux*ux)*πσ/3) : 0.0) +           # (iii) 2τ_M π_Q^{λ⟨μ}σ^{ν⟩}_λ
+          (i4 ? 2*τM*PiQ*σxx : 0.0) +                             # (iii) 2τ_M Π_Q σ
+          (i2 ? 2*cf.ηbar*σxx : 0.0) +                            # (ii)  2η̄ σ
+          q_xx                                                    # (iv)
+    syy = pyy +
+          (i1 ? 2*ηQ*sνyy : 0.0) +
+          geo*pyy +
+          (i3 ? 2*τM*(c_yy - (1 + uy*uy)*πσ/3) : 0.0) +
+          (i4 ? 2*τM*PiQ*σyy : 0.0) +
+          (i2 ? 2*cf.ηbar*σyy : 0.0) +
+          q_yy
+    sxy = pxy +
+          (i1 ? 2*ηQ*sνxy : 0.0) +
+          geo*pxy +
+          (i3 ? 2*τM*(c_xy - (ux*uy)*πσ/3) : 0.0) +
+          (i4 ? 2*τM*PiQ*σxy : 0.0) +
+          (i2 ? 2*cf.ηbar*σxy : 0.0) +
+          q_xy
+
+    # ── (iii) the VORTICITY coupling 2τ_M π_Q^{λ⟨μ}ω_λ^{ν⟩} — OFF by default ─────
+    if t.m2_vorticity
+        wxx, wxy, wyy = vorticity_coupling_2d(ux, uy, uτ, τ, pxx, pxy, pyy, peta,
+                                              ax, ay, dtux, dtuy, dxux, dxuy, dyux, dyuy)
+        sxx += τM*wxx; sxy += τM*wxy; syy += τM*wyy
+    end
+
+    # ── the PROJECTOR on the comoving derivative — added 2026-09-10 ─────────────
+    # The equation's first term is τ_M Δ^{ij}_{αβ} Dπ_Q^{αβ}, and for a symmetric,
+    # traceless, u-orthogonal tensor (u_α Dπ^{αβ} = −π^{αβ}a_α)
+    #     Δ^{ij}_{αβ} Dπ^{αβ} = Dπ^{ij} − u^i c^j − u^j c^i ,   c^j = π^{jβ} a_β ,
+    # exactly as dissipation2d.jl's header derives it for the MEDIUM shear, which has
+    # always carried it (`shear_projected_deriv`). This sector integrated plain
+    # τ_M Dπ^{ij}: the correction was missing, moved to the LHS source here with
+    # its minus. It vanishes at rest and is O(τ_M u a) otherwise — measured
+    # 1.6e-4 to 3.4e-3 of the rate at gate Gm1's four states.
+    # WHY NO GATE SAW IT: Gm1 mapped the 2-D RATE onto the 1-D p_l with the
+    # projection held FIXED, l_μl_ν ∂_τπ^{μν}; but l depends on u(τ), and
+    # ∂_τ(l l π) − l l ∂_τπ is exactly this term. The mis-mapped gate agreed with
+    # the projector-less code at 1e-15. Gm1 now differentiates the projection
+    # along the trajectory. Fluidum's HQ_2p1d_BG_m2.jl agreed with the old FiVo
+    # rows at 2.2e-16 (gate_2p1d_m2.jl N3), so it lacks the term too.
+    if t.m2_projector
+        aτ = (ux*ax + uy*ay)/uτ                                   # u·a = 0
+        Πq = shear_tensor_contravariant_2d(ux, uy, uτ, τ, pxx, pxy, pyy, peta)
+        cx = -Πq.tx*aτ + Πq.xx*ax + Πq.xy*ay                      # c^x = π^{xβ} a_β
+        cy = -Πq.ty*aτ + Πq.xy*ax + Πq.yy*ay                      # c^y = π^{yβ} a_β
+        sxx -= τM*(2*ux*cx)
+        sxy -= τM*(ux*cy + uy*cx)
+        syy -= τM*(2*uy*cy)
+    end
 
     # ── the trace channel (a scalar: same form as 1-D) ───────────────────────
-    sB = PiQ + ζQ*θν + geo*PiQ + (2.0/3.0)*τM*πσ +
-         cf.ηbar*(cf.ABr*DlnT + (5.0/3.0)*θ) +
-         (Ds*cf.Aco/(3*Tm))*aνdot + (5.0/6.0)*(Ds/Tm)*(νx*gTx + νy*gTy - ((νx*ux + νy*uy)*(gTx*ux + gTy*uy))/(uτ*uτ)) +
-         cf.ηbar*Dα
+    sB = PiQ +                                                    # relaxation
+         (i1 ? ζQ*θν : 0.0) +                                     # (i)   ζ_Q θ_(ν)
+         geo*PiQ +                                                # (iii) expansion
+         (i3 ? (2.0/3.0)*τM*πσ : 0.0) +                           # (iii) (2/3) τ_M π_Q:σ
+         cf.ηbar*((t.m2_bg_DlnT ? cf.ABr*DlnT : 0.0) +            # (ii)  η̄ (A/B) D ln T
+                  (i2 ? (5.0/3.0)*θ : 0.0)) +                     # (ii)  (5/3) η̄ θ
+         (ia ? (Ds*cf.Aco/(3*Tm))*aνdot : 0.0) +                  # (iv)  (D_s A/3T) a·ν
+         (ig ? (5.0/6.0)*(Ds/Tm)*(νx*gTx + νy*gTy - ((νx*ux + νy*uy)*(gTx*ux + gTy*uy))/(uτ*uτ)) : 0.0) +
+                                                                  # (iv)  (5D_s/6T) ν·∇(Th)
+         (t.m2_bg_Dalpha ? cf.ηbar*Dα : 0.0)                      # (ii)  η̄ Dα
 
     # ── solve τ_M u^τ ∂_τ X + src = 0 ─────────────────────────────────────────
-    # `geo` is returned as a FIFTH value because the caller's implicit update needs
-    # it: every channel above is AFFINE in its own field with coefficient (1 + geo)
-    # (`sxx = pxx + ... + geo*pxx`), so the exact backward-Euler solve is
-    #     X_new = (A X_old - R)/(A + 1 + geo),   R = -τ_M u^τ s - (1+geo) X_old.
-    # Recomputing geo at the call site would duplicate DlnT and DlnC and let the two
-    # drift apart; handing it back keeps ONE definition. See dissipation2d.jl.
+    # The fifth value `geo` is returned for callers that want it; the solver no
+    # longer uses it. Each channel is affine in its own field, but the coefficient
+    # is NOT (1 + geo) — the (iii) coupling is linear in π too (measured 1.6474 vs
+    # 1.4706, 2026-09-09) — so `relax_dissipative_2d!` MEASURES it by one extra
+    # evaluation per channel. (This comment claimed (1 + geo) until 2026-09-10.)
     den = τM * uτ
     return (-sxx/den, -sxy/den, -syy/den, -sB/den, geo)
+end
+
+"""
+    vorticity_coupling_2d(ux, uy, uτ, τ, pxx, pxy, pyy, peta,
+                          ax, ay, dtux, dtuy, dxux, dxuy, dyux, dyuy) -> (Xxx, Xxy, Xyy)
+
+The transverse block of `2 π^{λ⟨μ} ω_λ^{ν⟩}` for a traceless, u-orthogonal `π`
+stored as (pxx, pxy, pyy, peta). Multiply by `τ_M` and ADD to the LHS source.
+
+    ω^{αν} = ½(∇⊥^α u^ν − ∇⊥^ν u^α),   ∇⊥^α u^ν = g^{αα} ∂_α u^ν + u^α a^ν
+
+(the derivative index FIRST, as in the derivation's `ω_λ^μ = (∇⊥_λu^μ − ∇⊥^μu_λ)/2`
+and in DNMR's `ω^{μν} = (∇^μu^ν − ∇^νu^μ)/2`). Every η-component of ω vanishes by
+boost invariance, so only the (τ,x,y) block enters, and
+
+    2 π^{λ⟨μ} ω_λ^{ν⟩} = (π g ω) + (π g ω)ᵀ ,     (π g ω)^{μν} = π^{μλ} g_{λλ} ω^{λν} ,
+
+already symmetric, traceless and u-orthogonal (π symmetric, ω antisymmetric,
+both u-orthogonal) — no projection is needed.
+
+WHY IT IS HERE, AND WHY IT IS OFF BY DEFAULT (2026-09-10). The derivation's
+traceless equation (Tex/LangevinPaper1/M2_CONSISTENT_DERIVATION.md §4.1) has this
+term beside the σ coupling. In 1-D it vanishes identically — a radial flow has no
+transverse vorticity — so the 1-D code never needed it, and both 2-D ports (this
+file and Fluidum's `HQ_2p1d_BG_m2.jl`) were written from the 1-D reduction and do
+not have it. The 2.2e-16 cross-code gate cannot see that: the two codes agree on
+the same omission, and the 1-D-limit gates are blind to it by construction.
+MEASURED size, |ω|/|σ| over cells above T_fo: smooth elliptic IC median 4e-5 at
+τ = 1 → 1e-3 at τ = 3 (max 3e-2); a lumpy event 8e-4 → 7.6e-3 (max 0.12). Small,
+growing with lumpiness and time. It stays off by default so every existing
+number, and parity with Fluidum, is unchanged; `terms = (m2_vorticity = true,)`
+carries it.
+
+GATE Gt4 (test_terms2d.jl): zero in the axisymmetric limit; σ-coupling +
+ω-coupling equals the full contraction `π^{λ⟨μ}∇⊥_λu^{ν⟩}` built by brute-force
+index algebra (which ties this term's sign and normalisation to the σ coupling
+that gate Gm1 already holds at 1e-15); rotational covariance; Δ-tracelessness.
+"""
+@inline function vorticity_coupling_2d(ux::Float64, uy::Float64, uτ::Float64, τ::Float64,
+                                       pxx::Float64, pxy::Float64, pyy::Float64, peta::Float64,
+                                       ax::Float64, ay::Float64,
+                                       dtux::Float64, dtuy::Float64,
+                                       dxux::Float64, dxuy::Float64,
+                                       dyux::Float64, dyuy::Float64)
+    invuτ = safe_inv(uτ)
+    aτ = (ux*ax + uy*ay) * invuτ                                  # u·a = 0
+    # ∂_i u^τ from u^τ = √(1 + u_⊥²)
+    dxuτ = (ux*dxux + uy*dxuy) * invuτ
+    dyuτ = (ux*dyux + uy*dyuy) * invuτ
+    # A^{αν} = ∇⊥^α u^ν on the mixed pairs; g^{ττ} = −1 flips the ∂_τ row
+    Aτx = -dtux + uτ*ax;   Axτ = dxuτ + ux*aτ
+    Aτy = -dtuy + uτ*ay;   Ayτ = dyuτ + uy*aτ
+    Axy =  dxuy + ux*ay;   Ayx = dyux + uy*ax
+    ωτx = 0.5*(Aτx - Axτ)
+    ωτy = 0.5*(Aτy - Ayτ)
+    ωxy = 0.5*(Axy - Ayx)
+    # π^{τi} from orthogonality (shear2d.jl); π^{ττ} does not enter the ij block
+    Π = shear_tensor_contravariant_2d(ux, uy, uτ, τ, pxx, pxy, pyy, peta)
+    # (π g ω)^{iν} = −π^{iτ} ω^{τν} + π^{ix} ω^{xν} + π^{iy} ω^{yν},  ω^{ii} = 0
+    Mxx = -Π.tx*ωτx               - Π.xy*ωxy
+    Mxy = -Π.tx*ωτy + Π.xx*ωxy
+    Myx = -Π.ty*ωτx               - Π.yy*ωxy
+    Myy = -Π.ty*ωτy + Π.xy*ωxy
+    return (2*Mxx, Mxy + Myx, 2*Myy)
 end

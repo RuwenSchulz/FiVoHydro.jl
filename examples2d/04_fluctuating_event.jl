@@ -86,8 +86,16 @@ end
 
 function run_event(N, Tof, αof; τf = TAUF)
     g = H.make_grid2d(N, N; xmax = RMAX, ymax = RMAX)
+    # ⚠ `pi_clip_factor = 1` IS REQUIRED ON A LUMPY EVENT (added 2026-09-10). Without it this run
+    # stops at τ = 4.05: the shear grows past |π| ~ P in a hot spot and the state stops being
+    # invertible. It USED to finish, because until commit 0c27f6f (2026-09-08) the admissibility
+    # test was a tautology and MOOD/dt-halving could never fire — the example ran through an
+    # inadmissible state and reported success (bisected: 0c27f6f^ passes, 0c27f6f fails at the
+    # same τ bit for bit). The cap is what gate G9 uses; TWOD_PROGRAM.md §6j measured it inert on
+    # smooth ICs (Δv₂ 4e-6) and v₃ independent of its value (0.1465 / 0.1461 at f = 1 / 2, 5, 10).
     m = H.build_model_2d(; eos = H.LatticeHRGEOS(),
                            enable_shear = true, eta_over_s = 0.10, tauShear_coeff = 0.2,
+                           pi_clip_factor = 1.0,
                            enable_bulk  = true, zeta_over_s = 0.10, tauPi_coeff = 15.0,
                            enable_diff  = true, kappa_coeff = 0.1163, tauN_coeff = 1.0)
     U = H.allocate_state(g, m)
@@ -134,11 +142,19 @@ ra = run_event(200, Tavg, αof)
 
 println("\n  resolution check on the single event (a lumpy IC is the demanding one):")
 @printf("    %5s %8s %10s %10s %11s %9s\n", "N", "dx", "v₂", "v₃", "primfail", "max|u|")
-for N in (150, 200, 300)
-    r = run_event(N, T1, αof)
-    @printf("    %5d %8.3f %10.5f %10.5f %11d %9.3f\n",
-            N, 2RMAX/N, r.v2, r.v3, r.res.nprimfail, r.res.maxu)
+# A function, not a top-level loop: the ladder's numbers are kept for the text at the end, and an
+# accumulator in a top-level `for` is a fresh local every iteration (CLAUDE.md, trap 1).
+function resolution_ladder(T1, αof)
+    rows = NamedTuple[]
+    for N in (150, 200, 300)
+        r = run_event(N, T1, αof)
+        @printf("    %5d %8.3f %10.5f %10.5f %11d %9.3f\n",
+                N, 2RMAX/N, r.v2, r.v3, r.res.nprimfail, r.res.maxu)
+        push!(rows, (v2 = r.v2, v3 = r.v3, pf = r.res.nprimfail))
+    end
+    rows
 end
+ladder = resolution_ladder(T1, αof)
 
 g = r1.g; ng = g.nghost
 xs = [g.xC[ix] for ix in (ng+1):(ng+g.Nx)]; ys = [g.yC[iy] for iy in (ng+1):(ng+g.Ny)]
@@ -156,10 +172,15 @@ println("""
     ε₃ survives in one event and averages away over many; the flow anisotropy follows it. That is the
     whole argument for event-by-event running, in two lines of output — with the caveat in the header
     that ε₂ washes out too here only because this generator has no impact parameter.
-    The harmonics are converged to four digits by N = 150 (v₂ 0.4952/0.4962/0.4967, v₃ 0.1466/0.1455/
-    0.1453) — a lumpy IC is demanding for the recovery, not for the harmonics.
+    The harmonics converge by N = 150 — see the ladder above; a lumpy IC is demanding for the
+    recovery, not for the harmonics.
     The `primfail` column is a real diagnostic, not noise: those cells fall back to a floor, and the
     number to watch is whether it grows FASTER than the cell count as you refine. If it does, the run
     is being held together by the floors rather than by the scheme — which is exactly what the
-    from-scratch initial condition in this file's header was doing, at 40 000 failures against this
-    one's few hundred.""")
+    from-scratch initial condition in this file's header was doing, at 40 000 failures.""")
+@printf("  This run: v₂ %s, v₃ %s at N = 150/200/300, primfail %s.\n",
+        join((@sprintf("%.4f", r.v2) for r in ladder), "/"),
+        join((@sprintf("%.4f", r.v3) for r in ladder), "/"),
+        join((string(r.pf) for r in ladder), "/"))
+println("  (With `pi_clip_factor = 1`; before the cap was required, commit 0c27f6f^ gave v₃ 0.1466/0.1455/")
+println("   0.1453 with 1182/1995/3975 failures — the same harmonics, and the cap removes the failures.)")

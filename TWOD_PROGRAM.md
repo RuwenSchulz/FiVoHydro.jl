@@ -2983,3 +2983,218 @@ LP1 production path (`LP1_SHEAR_DELTAPI_FACTOR = 4/3`). More to the point: if th
 was real, `δ_ππ = 0` re-opens a ~30 % gap from some other cause and the two errors have been
 cancelling. Deciding that means re-running the 1-D comparison. Recorded as a decision to take, not
 taken. `COMPARISON_2P1D.md` §33.4 has the evidence.
+
+## 6ah. Two sign/operator defects in the charm closures, the term switches, and the docs (2026-09-10)
+
+A review pass against the question "is 2+1D FiVo documented, debugged, benchmarked, and are the
+equations readable?". The ladder was 20/20 green at the start of it (baseline re-run on
+`fe67084`). Two of the three findings below lived under that green ladder.
+
+### 6ah.1 🔴 The consistent first moment entered with the WRONG SIGN (since §6ae)
+
+`consistent_fm_source_2d` returns `s^i` **source-on-the-LHS** — the convention of the row it is
+derived from, `τ_n ΔDν + ν + κ∇^⟨i⟩α + s = 0`, of the 1-D `hq_consistent_extras` (added to `src[2]`
+of a system whose update is `dU = −At⁻¹(src + …)`, `main2IS2.jl:1434`) and of Fluidum's generated
+row (whose header says so). `relax_dissipative_2d!` **added** it to its right-hand target
+(`nsx += csx`). So every consistent term had the wrong sign. The at-rest T drive pointed charm
+**up** the temperature gradient, and the expansion term `τ_n θ ν` **anti-damped** the current.
+
+**Measured**, uniform Bjorken state with an initial uniform `ν^x`, where the row is exactly
+`τ_n dν/dτ = −(1 ± b)ν`, `b = τ_nθ + (D_s/T)h′∂_τT`:
+
+| τ | solver ν^x (old) | ODE, derived sign | ODE, old sign |
+|---|---|---|---|
+| 0.524 | 5.5938e-4 | 3.5238e-4 | **5.5917e-4** |
+| 1.175 | 3.3321e-4 | 5.101e-5 | **3.3275e-4** |
+
+`τ·ν^x` grew 1.00 → 1.63; it must dilute (collisionless limit `∂_τ(τν) = 0`). Fixed: `nsx -= csx`.
+After the fix the solver tracks the derived ODE to 7e-4 and `τν` falls to 0.24.
+
+🔑 **Why nothing saw it.** Gc1–Gc4, E3 and the at-rest referee all check the source VALUE at a
+fixed state, and the value was right. The side of the equation it went on is an UPDATE property —
+the §6af lesson ("an RHS gate cannot see an update"), one sector over. New gate **Gc7** evolves the
+Bjorken state. Verified on a scratch copy with the old line restored: Gc1–Gc6 pass and Gc7 fails all
+three assertions.
+
+🔑 **The referee had been fitted to the bug.** `FiVoFluidumComparison/gate_transverse_fm.jl` (in
+`programme.jl check`) was first written with the derived sign. It measured cos = −0.98 against the
+solver and was then "corrected" to the solver's sign ("the signature of a reference sign error").
+Its Fluidum leg stated `c_Fluidum = 1 − c_FiVo`, one line under a table showing `1 + c_FiVo`, and
+printed `+s0/c` for an LHS row. Those two slips cancelled into "cos +0.973, amplitude 0.129,
+unexplained". With the derived sign restored: FiVo L2 0.37 % (2068 cells, **0 skipped** — the "c ≥ 1,
+no attractor" exclusion that threw out most of the domain was the bug's anti-damping), and
+**Fluidum's independently generated row reaches the same closed-form fixed point at L2 2.5e-6,
+amplitude 1.00000, cos 1.000000**. The Fluidum leg is now gated (T4).
+
+Scope: only runs with `consistent_fm = true`, none of them production. Affected records:
+`COMPARISON_2P1D.md` §19–§31 (every FiVo leg with the flag on) and memory
+`project_fivo_transverse_referee_0909`.
+
+### 6ah.2 🔴 The charm second moment lacked the projector on `Dπ_Q` (since §6af)
+
+The equation's first term is `τ_M Δ^{ij}_{αβ}Dπ_Q^{αβ} = τ_M(Dπ_Q^{ij} − u^ic^j − u^jc^i)`,
+`c^j = π_Q^{jβ}a_β`. The medium shear has always carried the correction (`shear_projected_deriv`);
+the charm second moment integrated plain `τ_M Dπ_Q^{ij}`.
+
+🔑 **Why Gm1 passed at 2.3e-15.** It mapped the 2-D rate onto the 1-D `p_l` as
+`l_μl_ν ∂_τπ^{μν}` with `l = (u^r, u^τ)` held fixed. But `l` moves with the flow, and
+`∂_τ(llπ) − ll∂_τπ` is exactly the missing term. The frozen map agreed with the projector-less rows
+to round-off. A second mismatch was hiding behind it: the 1-D side was handed `∂_r p_l = 0`, the 2-D
+side implicitly `∂_xπ^{xx} = 0`, and those are different states when `u` varies in space. The
+advection that reconciles them is `2(u^r)²π^{xx}∂_ru^r/(u^τ)⁵`.
+
+Fixed in `consistent_m2_source_2d` (switch `terms.m2_projector`, on); Gm1 now differentiates the
+projection along the trajectory and matches the states. Result: **4.0e-16** with the term,
+**5.7e-3** without it (control run). At Gm1's four states the term is 0.02–0.57 % of the `p_l` rate.
+`terms = (m2_projector = false,)` reproduces the old rows bit for bit (checked on a full solve).
+Fluidum's `HQ_2p1d_BG_m2.jl` agreed with the old rows at 2.2e-16 (N3) and so lacks the term too;
+not changed there.
+
+### 6ah.3 The vorticity coupling `2τ_M π_Q^{λ⟨μ}ω_λ^{ν⟩}` was absent from both 2-D codes
+
+It is in the derived equation (`M2_CONSISTENT_DERIVATION.md` §4.1) and vanishes identically in 1-D
+(radial flow has no transverse vorticity). Both 2-D ports were written from the 1-D reduction, so
+neither has it, and the 1-D-limit and cross-code gates cannot see its absence. Measured
+`|ω|/|σ|` above T_fo: smooth elliptic IC median 4e-5 (τ = 1) → 1e-3 (τ = 3), max 3e-2; lumpy
+event 8e-4 → 7.6e-3, max **0.12**. Added as `vorticity_coupling_2d`, `terms.m2_vorticity`, **off**
+by default (every number and the Fluidum parity unchanged). Gate Gt4 ties its sign and normalisation
+to the σ coupling: σ-part + ω-part equals the full `π^{λ⟨μ}∇⊥_λu^{ν⟩}` built by brute-force index
+algebra (1.1e-14). The sign also agrees with DNMR's `+2τ_π π_λ^{⟨μ}ω^{ν⟩λ}`, checked by working
+that term out in the local rest frame (the value is independent of metric signature).
+
+### 6ah.4 Term switches, readability, docs
+
+- `src2d/terms2d.jl`: `Terms2D` (17 switches) and the register `TERMS_2D`. `show_equations(model)`
+  prints every equation with `[x]/[ ]` per term. A switch in a disabled sector, or a misspelled one,
+  is refused. Every term is written `on ? term : 0.0`, so the default arithmetic is unchanged —
+  **bit-identical on five sector configurations** (regression harness). Gate **Gt** (fast tier):
+  every switch wired, the pieces additive to 1e-15, the vorticity coupling.
+- `relax_dissipative_2d!` split into `relax_{bulk,shear,charge,charm_m2}_cell_2d!`, each opening with
+  the equation it integrates. The bodies and their dated notes moved verbatim; bit-identical.
+- Also fixed: `tauM_charm_2d` hardcoded `z = 1.5/T` (now takes the transport mass; the 2-argument
+  form keeps 1.5); `consistent_m2_source_2d` returned 4 values on its early exit and 5 otherwise;
+  two stale headers claimed 2-D had no second-moment sector.
+- Recorded, not changed: the second moment is handed the vacuum-ramped `τ_n`.
+- New `fields_2d(g, U, work, model)`, which returns every field as an `Nx × Ny` matrix.
+- New docs: `README2D.md` (front door), `EQUATIONS2D.md` (every term, its code, switch and gate,
+  and a corrections log). New example `examples2d/06_charm_terms.jl`: every closure term removed
+  one at a time on a fireball, 35 s. `bench2d.jl` gained the closure rows: `consistent_fm` +4 %,
+  `+ consistent_m2` +26 % over all medium sectors at N = 200.
+- The primitive-recovery gates include `src2d/` files piecemeal and needed `terms2d.jl` added;
+  the fast tier is now six gates, ~30 s, three of them with short solves.
+
+### 6ah.5 Example 04 had been failing since 2026-09-08 — the safety net working, not a regression
+
+The final suite run (2026-09-11) failed `examples2d/04_fluctuating_event.jl` at τ = 4.05 ("step
+failed after dt halving"). Not caused by §6ah: the committed pre-session code fails at the same τ bit
+for bit. Bisected to `0c27f6f` (D12, 2026-09-08 13:29). Its parent finishes; it does not. Before D12
+the admissibility test was a tautology, so this unregulated lumpy event ran through an
+inadmissible state (1182–3975 recovery failures) and reported success. The suite baseline was
+recorded that morning, before D12. Fix: the example now sets `pi_clip_factor = 1`, as gate G9 does. Result:
+v₃ 0.1466/0.1457/0.1454 at N = 150/200/300 (0.1466/0.1455/0.1453 before), failures 0/0/0. The
+example now prints its ladder rather than quoting numbers in prose. All six examples pass; the
+full ladder is 21/21.
+
+## 6ai. The solver is 3.4x faster, and 60 % of it was one Bessel function (2026-09-11)
+
+Asked for speed. Profiled first (`Profile`, single thread, production IC, N = 200, τ 0.4 → 2, all
+medium sectors): **~60 % of the entire runtime was `_besselk(nu, z::ComplexF64, …)`** inside
+SpecialFunctions. `LatticeHRGEOS`'s charm density needs `K₂(m/T)`, and SpecialFunctions evaluates a
+Bessel K of REAL argument through the complex Amos route — 163 ns a call — while the Newton
+primitive recovery calls the EOS about a dozen times per cell, three times per step (two RK stages
+plus the refresh before the relaxation).
+
+| | 1 thread | 8 threads |
+|---|---|---|
+| before | 39.6 s | 6.75 s |
+| after | **11.7 s** | **2.02 s** |
+| | **3.4x** | **3.3x** |
+
+Four changes. THREE ARE BIT-IDENTICAL (regression harness: six sector configurations incl. the
+production IC, every field compared with `isequal`); the fourth is round-off.
+
+**1. The EOS is memoised on T inside one Newton solve** (`EOSCache2D`, primrec2d.jl). 1.78x,
+bit-identical. The central finite-difference Jacobian is 8 residual evaluations, and in SIX of them
+only φ, u^x or u^y moves — T is unchanged, so the light-sector P and e and `K₂(m/T)` are the numbers
+just computed. The final acceptance test re-evaluates at a T already seen. A 4-slot cache keyed on
+the exact Float64 T returns the identical bits; it is reset at the start of every solve, so it never
+outlives one cell and one EOS.
+
+**2. The Newton SEED no longer evaluates a Bessel function** (`eos_Pe_2d`). Bit-identical.
+`_invert_e_for_T` bisects e(T) with up to 180 EOS calls and never reads the density — and for this
+EOS the charm sector contributes exactly `+ 0.0` to P and e, so P and e are light-sector only.
+
+**3. `Threads.@threads :greedy`** on the three heavy loops (`_primitive_pass!`, `_faces_2d!`,
+`relax_dissipative_2d!`). 1.14x on 8 threads, bit-identical — every column is independent, so the
+order does not matter. The default hands each thread ONE CONTIGUOUS BLOCK of x-columns; on a real
+fireball in a ±20 fm box the outer blocks are vacuum (cheap) and the middle ones carry the matter (a
+full Newton per cell). With 8 blocks that predicts ~5.5/8 efficiency, and 5.4x on 8 threads is what
+was measured before the change. (Measured A/B under load: 4.08/4.21 s vs 3.61/3.65 s.)
+
+**4. 🔴 A fast K₂ — NOT bit-identical** (`src2d/bessel2d.jl`). 1.6x more. `K₂ = K₀ + (2/x)K₁` with
+the scaled K₀, K₁ rational approximations of Bessels.jl v0.2.8 (MIT, Boost coefficients after
+Holoborodko) VENDORED — not a dependency, because the 2-D scripts run under two different project
+environments. **8.6 ns against 163 ns (19x)**, agreeing with SpecialFunctions to **1.6e-15**
+(max rel, 200 000 points over x ∈ [0.15, 1e4]; bit-identical at 36 % of them).
+
+⚠ **What that costs.** The conserved fields of a full solve move by ≤ **3.8e-14 absolute**, ~2e-15
+relative — round-off, ten orders below anything the gates resolve, but the 2-D solver is no longer
+bit-identical to its pre-2026-09-11 self in the CHARM DENSITY. P and e are (no Bessel enters them),
+and for x ≥ `BESSELKX_ASYM_X` (vacuum, floors) it is the same asymptotic series as `safe_besselkx`,
+so that regime is bit-identical too. `src/eos.jl` and `main.jl` are NOT touched, so every 1-D
+production number stays byte-identical.
+
+**One EOS for the 2-D solver.** Every evaluation that needs the density now goes through
+`eos_Pne_2d` — the residual, the forward map (`prim_to_cons_2d!`: face states and `set_cell!`), the
+fallbacks — cached in the Newton, uncached elsewhere, the two returning identical bits.
+
+**The gate** (`test_primrec2d.jl`, fast tier): the vendored Bessel against SpecialFunctions over the
+sweep and bit-identical in the asymptotic branch; `eos_Pne_2d` against `eos_Pne` — **P and e bitwise
+1612/1612, n to 6.7e-16**; the memo against the uncached call, 63/63 with evictions. `src/eos.jl` is
+copied into `primrec2d.jl`'s assembly, and this gate is what catches a future divergence.
+
+**Where the time goes now**: roughly half in the face states and the Riemann solver, the rest in what
+is left of the recovery. The next step would be an analytic Jacobian, which moves results at the
+1e-12 Newton tolerance — a bigger deviation than anything above, and not taken.
+
+## 6aj. Three 2-D examples with animations, and a mask that doubles ε_p (2026-09-11)
+
+`examples2d/07_real_event.jl`, `08_vorticity.jl`, `09_gubser.jl` — asked for as "nice 2-D ICs" with
+animations. All nine examples pass through the suite (8.6 min total, baselines recorded).
+
+**07 — a real Pb+Pb event to freeze-out.** Reads `ic2d_20-30_ev01.csv` (an un-averaged MC-Glauber
+event) through a new `smooth_fm` argument of `initialize_from_grid_csv!`: an optional Gaussian blur
+of the FILE grid, default 0 = byte-for-byte what it was. A real event carries W = 0.5 fm sources a
+dx ≳ 0.2 fm grid cannot resolve. Measured, raw vs σ = 0.4 fm: T_max(τ₀) 0.733 → 0.654, ε₂ −3.1 %,
+ε₃ **+11.2 %**, ε_p −6.7 %, response ε_p/ε₂ 0.670 → 0.645 (−3.7 %), max|u| 1.61 → 1.45.
+⚠ ε₃ goes UP, against the intuition that a blur removes lumps: ε_n carries an r^n weight, so ε₃ is
+dominated by the outskirts while the blur mostly lowers the nearly isotropic central peak. Measured,
+not assumed — the example says so.
+
+🔴 **AND A MASK ARTEFACT WORTH THE EXAMPLE ON ITS OWN.** ε_p restricted to T > T_fo RISES from 0.257
+(τ = 5.7) to **0.457** (τ = 8.0) on this event, while the same field over the whole fireball FALLS,
+0.229 → 0.213. The cell count is the tell: 8454 → 5291. As the interior cools through T_fo the
+surviving cells are the fast, anisotropic outer edge, so the average climbs on a shrinking
+denominator — CLAUDE.md's own trap, and the reason §6 says the T_fo-restricted v₂ is not usable
+late. The example plots BOTH curves. A first version of the file used a v_n proxy and I wrote "the
+proxy dies with the fireball" as the explanation; the fireball was still 124 fm², so that was wrong
+and the measurement above is what replaced it.
+
+**08 — `m2_vorticity` on against off**, on that event, with the charm closures live. ‖ω‖/‖σ‖ over
+cells above T_fo: median 6.1e-3 at τ = 1.1 rising to **3.0e-2** at τ = 5.8 (p90 1.0e-1, max 0.60) —
+it GROWS, because σ falls as the fireball dilutes while ω does not. Switching the term on moves
+π_Q by **1.2 %** and Π_Q by 1.9e-4 at τ = 5.8, and moves ν and T by **exactly 0.0** (the second
+moment is passive at c_M = 0 — a wiring check, not a physics result). That is the case for leaving
+the default OFF: on this event the term is smaller than the 19 % π_Q^{xx} disagreement the sector
+already has with Fluidum (COMPARISON_2P1D.md §31.5), and turning it on breaks the parity that is
+currently the sector's main external check.
+
+**09 — Gubser flow**, the example version of gate G1: solver against the exact solution, animated
+side by side with their difference, plus the convergence ladder — L2(T) 6.50e-3 → 1.82e-3 → 4.53e-4
+at N = 100/200/400, **order 1.84 then 2.01**; L2(|u|) 2.00 then 1.98.
+
+Also: `figures/anim/` (5 gifs, 5.9 MB) is **gitignored** — regenerable, and this package untracked
+6.9 MB of figures on 2026-09-08 for the same reason. The animations follow
+`animate_fluctuating_fields.jl`'s two rules: colour scale FIXED across frames, and taken from cells
+above freeze-out (the vacuum tail's |u| is several times the fireball's).
+🪤 The Julia soft-scope trap bit once more, in 09's convergence ladder (`prev` in a top-level `for`).

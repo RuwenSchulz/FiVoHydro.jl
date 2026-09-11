@@ -132,6 +132,10 @@ Base.@kwdef struct IdealDiffVisc2DModel{EOS,PR,SH,BU}
     # INDEPENDENT of consistent_fm so the two moments attribute separately.
     consistent_m2::Bool         = false
 
+    # PER-TERM SWITCHES inside the two charm closures (src2d/terms2d.jl). Defaults
+    # are the shipped equations bit for bit; `show_equations(model)` prints them.
+    terms::Terms2D              = Terms2D()
+
     # ---- shear ----
     enable_shear::Bool          = false
     shear::SH                   = ZeroViscosity()
@@ -264,5 +268,6 @@ function reject_unwired_knobs_2d(m::IdealDiffVisc2DModel)
               "breaks and the sources silently use a different enthalpy than the relaxation time. " *
               "Use `tauN_coeff = 1.0` with the consistent closure, or turn the closure off.")
     end
+    check_terms_2d(m)    # a term switch whose sector is off would act on nothing
     return nothing
 end

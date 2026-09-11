@@ -1,6 +1,6 @@
 # FiVoHydro 2+1D — worked examples
 
-Five runnable setups for `main2D.jl` / `src2d/`, each a few minutes, each producing a figure in
+Nine runnable setups for `main2D.jl` / `src2d/`, each seconds to a few minutes, each producing a figure in
 `figures/`. They are written to be **copied and edited**, and every trap this solver has actually
 shipped is called out in a comment where it would bite.
 
@@ -10,6 +10,10 @@ julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/02_elli
 julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/03_choosing_a_resolution.jl
 julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/04_fluctuating_event.jl
 julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/05_dissipative_sectors.jl
+julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/06_charm_terms.jl
+julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/07_real_event.jl
+julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/08_vorticity.jl
+julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/09_gubser.jl
 ```
 
 | | what it shows |
@@ -19,10 +23,61 @@ julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/05_diss
 | **03** choosing a resolution | the three-grid Richardson study, and why a field, an observable and a conserved quantity converge at three different rates |
 | **04** a fluctuating event | v₃ from lumps, why it needs one event at a time, and harmonics about the participant plane rather than the grid axes |
 | **05** the dissipative sectors | what each sector changes and costs, how big \|π\|/P really gets, and whether the regulators are inert |
+| **06** the charm terms | `show_equations`, the `Terms2D` switches, and what each term of the consistent first and second moments moves when removed — including the vorticity coupling that is off by default |
+| **07** a real event | a single un-averaged MC-Glauber Pb+Pb event from file to freeze-out, raw against lightly smoothed (`smooth_fm`); what the blur costs in ε₂, ε₃ and the response, and a mask artefact that doubles ε_p if you let it |
+| **08** vorticity on vs off | `m2_vorticity` measured rather than assumed: \|ω\|/\|σ\| over the fireball, what the term moves in π_Q and Π_Q, and the proof that it moves neither the medium nor the current |
+| **09** Gubser flow | the one 2-D problem with an exact answer: solver beside the closed form, and the convergence order that turns "looks right" into a number |
 
-These are **examples, not gates**. The validation ladder is `test/run2d_gates.jl` — 18 gates, all
-passing as of 2026-09-03 — and the physics behind each of them is `TWOD_PROGRAM.md`. Run the ladder
-before trusting a change; run these to learn the API or to start a new study.
+**Three of them write ANIMATIONS** into `figures/anim/` (gifs, a few MB each, **not tracked by
+git** — regenerable, and this package untracked 6.9 MB of figures once already):
+
+| file | what moves |
+|---|---|
+| `ex07_temperature.gif`, `ex07_charm_density.gif` | the event cooling to freeze-out, with the T_fo contour; the charm density diluting |
+| `ex08_omega_over_sigma.gif`, `ex08_delta_piQxx.gif` | where the transverse vorticity lives, and where switching the coupling on changes π_Q |
+| `ex09_gubser.gif` | solver, exact solution and their difference, side by side in time |
+
+**High resolution.** Example 08 takes `EX08_N` (default 160): `EX08_N=480 EX08_NFRAME=60
+EX08_SIZE=900 EX08_FPS=12 julia …` renders the vorticity study at 3x (~5 min; N = 640 is 4x and
+~12 min). Fine runs write `*_N<N>.gif` / `ex08_vorticity_N<N>.png`, so they never overwrite the
+default ones. The conclusion **converges**, which is the point of running it fine at all:
+
+| N | dx [fm] | \|ω\|/\|σ\| median | p90 | π_Q shift | Π_Q shift |
+|---|---|---|---|---|---|
+| 160 | 0.175 | 3.01e-2 | 1.02e-1 | 1.24e-2 | 2.26e-4 |
+| 480 | 0.058 | 2.84e-2 | 9.15e-2 | 1.00e-2 | 1.66e-4 |
+| 640 | 0.044 | 2.79e-2 | 9.04e-2 | 9.91e-3 | 1.67e-4 |
+
+160 → 480 moves the median 6 % and the π_Q shift 19 %; 480 → 640 moves them 1.8 % and 1.0 %. The
+`max` column is the exception and does **not** converge — it grows with resolution, because the
+sharpest filaments are exactly what refinement resolves. Read the median and the p90.
+
+**Seeing the whole tail.** The 08 maps frame the fireball and fade past freeze-out, because that is
+where the quoted numbers live. `EX08_NOFADE=1` shows every cell holding fluid at full strength on
+the whole ±14 fm box, and `EX08_TAUF=8.0` runs past the default 6 fm/c — both change the filename,
+neither changes a number (every statistic is over `T > T_fo` cells regardless). That render is what
+turned up the **outer vorticity**: at r ≈ 9–12 fm, \|ω\| runs ~350× the all-cell median while \|σ\|
+is merely 2× it, so the fluid's outer edge swirls far harder than the fireball it came from.
+⚠ a nofade gif and a faded one carry different colorbars by construction — each is scaled (p99.5) to
+the cells it draws, so brightness is not comparable between them.
+
+⚠ Three rules those animations follow. Two were learned the hard way in
+`Projects/FiVoFluidumComparison/animate_fluctuating_fields.jl`: the colour scale is **fixed across
+frames** (a per-frame scale makes a cooling fireball look static), and it is taken from cells
+**above freeze-out** (the vacuum tail carries \|u\| several times the fireball's, and one such cell
+flattens every frame to a single colour). The third is **no hard mask edge**: a
+`T > T_fo ? value : NaN` mask draws the fireball with a razor rim that moves frame to frame and
+reads as a rendering artefact rather than as a freeze-out surface. Example 08 fades the colour into
+the background over a temperature band and keeps the T_fo **contour** on top; example 09 fades its
+error across the comparison radius and draws that radius as a **ring**. Both fade the colour only —
+08 deliberately does not damp the value, because the bright fringe just inside freeze-out is real
+(σ there is *above* the hot-cell median; `EX08_DIAG=1` prints the check).
+
+These are **examples, not gates**. The validation ladder is `test/run2d_gates.jl` (21 gates; the
+table and the last run are in `../README2D.md` §5), the equations are `../EQUATIONS2D.md`, and the
+physics behind each gate is `TWOD_PROGRAM.md`. Run the ladder before trusting a change; run these to
+learn the API or to start a new study. (This paragraph said "18 gates, all passing as of 2026-09-03"
+until 2026-09-10.)
 
 ```sh
 julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run2d_gates.jl

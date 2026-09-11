@@ -87,6 +87,150 @@
 end
 
 # ------------------------------------------------------------------------------
+# The 2-D equation of state: `eos_Pne_2d` (2026-09-11)
+#
+# Every EOS evaluation in the 2-D solver that needs the charge density goes through
+# `eos_Pne_2d` — the Newton residual, the forward map (face states, `set_cell!`),
+# the fallbacks — so the solver uses ONE implementation of n(T, α) throughout.
+#
+# For `LatticeHRGEOS` it is `eos_Pne` with two changes, both for speed:
+#
+#  1. K₂(m/T) comes from `safe_besselk2x_2d` (src2d/bessel2d.jl), 19× faster than
+#     SpecialFunctions' complex-argument Amos route. The charm density then agrees
+#     with `eos_Pne` to ~1e-15 relative, NOT bit for bit; P and e ARE bit-identical
+#     (no Bessel function enters them).
+#  2. Inside one Newton solve the T-only part — P_light, e_light, K₂ — is memoised on
+#     the exact Float64 T (`EOSCache2D`). The finite-difference Jacobian perturbs
+#     φ, u^x and u^y in 6 of its 8 evaluations, all at unchanged T, and the final
+#     acceptance test re-evaluates at a T already seen. A hit returns the identical
+#     bits, so the memo changes nothing but the cost. The cache is reset at the
+#     start of every solve, so it never outlives one cell and one EOS.
+#
+# Measured on the production IC (N = 200, τ 0.4 → 2): the memo alone 39.6 → 22.2 s
+# single-threaded, bit-identical; the fast Bessel on top → 11.7 s. `src/eos.jl` is
+# not touched — it is shared with the 1-D production solver. The copy of its
+# arithmetic below is the price; test_primrec2d.jl compares the two over a sweep
+# (P, e bitwise; n to 1e-14), which is what keeps the copy honest.
+# ------------------------------------------------------------------------------
+mutable struct EOSCache2D
+    T::Vector{Float64}       # keys (NaN = empty; NaN never equals anything, so never hits)
+    Pl::Vector{Float64}      # light-sector pressure at T
+    el::Vector{Float64}      # light-sector energy density at T
+    K2::Vector{Float64}      # eˣ K₂(x), x = m/T
+    next::Int                # round-robin slot
+end
+EOSCache2D() = EOSCache2D(fill(NaN, 4), zeros(4), zeros(4), zeros(4), 1)
+
+@inline function reset_eos_cache_2d!(c::EOSCache2D)
+    @inbounds for j in 1:4
+        c.T[j] = NaN
+    end
+    c.next = 1
+    return c
+end
+
+# The charm-density assembly of `eos_Pne(::Float64, ::Float64, ::LatticeHRGEOS)`,
+# operation for operation, given the T-only pieces. ⚠ Change with src/eos.jl.
+@inline function _lhrg_assemble_2d(T::Float64, μ::Float64, eos::LatticeHRGEOS,
+                                   x::Float64, Pl::Float64, el::Float64, K2x::Float64)
+    if !(isfinite(x)) || x <= 0.0
+        return Pl, 0.0, el
+    end
+    m = hq_mass(eos)
+    g = eos.g_hq
+    A   = eos.canon_factor*g * m^2 / (2π^2)
+    z   = (μ - m) / T
+    z   = clamp(z, -700.0, 700.0)
+    Efac = exp(z)
+    n_hq = A * T   * Efac * K2x
+    P_hq = 0.0                      # disabled in src/eos.jl too
+    e_hq = 0.0
+    if eos.hq_times_fmGeV3
+        n_hq *= fmGeV3
+        P_hq *= fmGeV3
+        e_hq *= fmGeV3
+    end
+    return Pl + P_hq, n_hq, el + e_hq
+end
+
+@inline _lhrg_x_2d(T::Float64, eos::LatticeHRGEOS) = min(hq_mass(eos) / T, 10^5)
+@inline _lhrg_K2_2d(x::Float64) = (!(isfinite(x)) || x <= 0.0) ? 0.0 : safe_besselk2x_2d(x)
+
+"""
+    eos_Pne_2d(T, μ, eos)        -> (P, n, e)
+    eos_Pne_2d(T, μ, eos, cache) -> (P, n, e)
+
+The 2-D solver's equation of state (see the block above): `eos_Pne` with the fast
+K₂ for `LatticeHRGEOS`, and with the T-only part memoised when a `cache` is given.
+The two forms return identical bits. Any other EOS goes straight to `eos_Pne`.
+"""
+@inline eos_Pne_2d(T::Float64, μ::Float64, eos) = eos_Pne(T, μ, eos)
+@inline eos_Pne_2d(T::Float64, μ::Float64, eos, ::EOSCache2D) = eos_Pne(T, μ, eos)
+
+@inline function eos_Pne_2d(T::Float64, μ::Float64, eos::LatticeHRGEOS)
+    T  = max(T, T_MIN)
+    Pl = light_P(T, eos)
+    el = -Pl + T*light_dP_dT(T, eos)          # ≡ light_e(T, eos), without a second light_P
+    x  = _lhrg_x_2d(T, eos)
+    return _lhrg_assemble_2d(T, μ, eos, x, Pl, el, _lhrg_K2_2d(x))
+end
+
+@inline function eos_Pne_2d(T::Float64, μ::Float64, eos::LatticeHRGEOS, c::EOSCache2D)
+    T = max(T, T_MIN)
+    k = 0
+    @inbounds for j in 1:4
+        if c.T[j] == T
+            k = j; break
+        end
+    end
+    x = _lhrg_x_2d(T, eos)
+    @inbounds if k == 0
+        k = c.next
+        c.next = (k == 4) ? 1 : k + 1
+        Pl = light_P(T, eos)
+        c.T[k]  = T
+        c.Pl[k] = Pl
+        c.el[k] = -Pl + T*light_dP_dT(T, eos)
+        c.K2[k] = _lhrg_K2_2d(x)
+    end
+    @inbounds return _lhrg_assemble_2d(T, μ, eos, x, c.Pl[k], c.el[k], c.K2[k])
+end
+
+"""
+    eos_Pe_2d(T, μ, eos) -> (P, e)
+
+The pressure and energy density of `eos_Pne(T, μ, eos)`, bit for bit, without the
+charge density. For `LatticeHRGEOS` that skips the Bessel function entirely: the
+charm sector's contributions to P and e are switched off in `src/eos.jl` (they are
+exactly `+ 0.0`), so P and e are light-sector only. Used by the Newton SEED, which
+bisects e(T) with up to 180 EOS calls and never reads n — it was 11 % of the
+solver's runtime, almost all of it Bessel functions whose value was discarded.
+"""
+@inline function eos_Pe_2d(T::Float64, μ::Float64, eos)
+    P, _, e = eos_Pne(T, μ, eos)
+    return P, e
+end
+
+@inline function eos_Pe_2d(T::Float64, μ::Float64, eos::LatticeHRGEOS)
+    # ⚠ Mirrors the P and e of `eos_Pne(::Float64, ::Float64, ::LatticeHRGEOS)`.
+    T = max(T, T_MIN)
+    Pl = light_P(T, eos)
+    el = -Pl + T*light_dP_dT(T, eos)      # ≡ light_e(T, eos), without recomputing light_P
+    x = hq_mass(eos) / T
+    x = min(x, 10^5)
+    if !(isfinite(x)) || x <= 0.0
+        return Pl, el
+    end
+    P_hq = 0.0
+    e_hq = 0.0
+    if eos.hq_times_fmGeV3
+        P_hq *= fmGeV3
+        e_hq *= fmGeV3
+    end
+    return Pl + P_hq, el + e_hq
+end
+
+# ------------------------------------------------------------------------------
 # Per-thread scratch
 # ------------------------------------------------------------------------------
 mutable struct PrimRecWork2D
@@ -102,11 +246,12 @@ mutable struct PrimRecWork2D
     last_iters::Int
     last_resnorm::Float64
     last_rows::Vector{Float64}      # per-row scaled residual at exit (diagnosis)
+    eosc::EOSCache2D                # EOS memo, reset at the start of every Newton solve
 end
 
 PrimRecWork2D() = PrimRecWork2D(zeros(4), zeros(4), zeros(4), zeros(4),
                                 zeros(4,4), zeros(4,5), zeros(4),
-                                PRR_UNSET, 0, NaN, zeros(4))
+                                PRR_UNSET, 0, NaN, zeros(4), EOSCache2D())
 
 mutable struct IdealPrimRec2D
     work::Vector{PrimRecWork2D}
@@ -158,7 +303,7 @@ fail; used only to build a starting point."""
     @inbounds for _ in 1:60
         mid = 0.5*(lo + hi)
         Tm  = exp(mid)
-        _, _, em = eos_Pne(Tm, hq_mass(eos) + Tm*φ, eos)
+        _, em = eos_Pe_2d(Tm, hq_mass(eos) + Tm*φ, eos)      # P, e only: no Bessel
         if !isfinite(em) || em > e_target
             hi = mid
         else
@@ -189,7 +334,7 @@ function seed_from_conserved_2d(E::Float64, Sx::Float64, Sy::Float64, φ::Float6
         e <= 0.0 && (e = max(E, TINY))
         yT = _invert_e_for_T(e, φ, eos)
         T  = exp(yT)
-        Pn, _, _ = eos_Pne(T, hq_mass(eos) + T*φ, eos)
+        Pn, _ = eos_Pe_2d(T, hq_mass(eos) + T*φ, eos)
         isfinite(Pn) || break
         P = Pn
     end
@@ -216,7 +361,8 @@ constrain φ and the 4×4 system would be singular. This mirrors the 1-D
                            D::Float64, Sx::Float64, Sy::Float64, E::Float64,
                            nux::Float64, nuy::Float64, Pi::Float64,
                            pixx::Float64, pixy::Float64, piyy::Float64, pieta::Float64,
-                           τ::Float64, eos; ncharge::Bool = true)
+                           τ::Float64, eos; ncharge::Bool = true,
+                           cache::Union{Nothing,EOSCache2D} = nothing)
     yT = x[1]; φ = x[2]; ux = x[3]; uy = x[4]
     if !(isfinite(yT) && isfinite(φ) && isfinite(ux) && isfinite(uy))
         fill!(F, Inf); return
@@ -226,7 +372,7 @@ constrain φ and the 4×4 system would be singular. This mirrors the 1-D
     μ  = hq_mass(eos) + T*φ
     uτ = sqrt(1 + ux*ux + uy*uy)
 
-    P, n, e = eos_Pne(T, μ, eos)
+    P, n, e = cache === nothing ? eos_Pne_2d(T, μ, eos) : eos_Pne_2d(T, μ, eos, cache)
     if !(isfinite3(P, n, e))
         fill!(F, Inf); return
     end
@@ -268,7 +414,8 @@ end
 
 """Bisect row 1 for φ at fixed (T, u). Returns (φ, ok)."""
 @inline function _solve_phi_bisect(D::Float64, T::Float64, ux::Float64, uy::Float64,
-                                   nux::Float64, nuy::Float64, eos)
+                                   nux::Float64, nuy::Float64, eos,
+                                   c::EOSCache2D = EOSCache2D())
     uτ = sqrt(1 + ux*ux + uy*uy)
     target = D - nu_tau_2d(ux, uy, uτ, nux, nuy)
     m = hq_mass(eos)
@@ -278,11 +425,11 @@ end
     lo = -PHI_CAP; hi = PHI_CAP
     @inbounds for _ in 1:200
         mid = 0.5*(lo + hi)
-        _, nm, _ = eos_Pne(T, m + T*mid, eos)
+        _, nm, _ = eos_Pne_2d(T, m + T*mid, eos, c)
         (isfinite(nm) && nm*uτ > target) ? (hi = mid) : (lo = mid)
     end
     φ = 0.5*(lo + hi)
-    _, nf, _ = eos_Pne(T, m + T*φ, eos)
+    _, nf, _ = eos_Pne_2d(T, m + T*φ, eos, c)
     return φ, isfinite(nf)
 end
 
@@ -387,6 +534,7 @@ function _cons_to_prim_attempt_2d!(w::PrimRecWork2D,
     end
 
     ncharge = eos_has_charge_2d(eos)
+    ec = reset_eos_cache_2d!(w.eosc)       # one solve, one EOS: never reuse across cells
 
     x = w.x; F = w.F; Fp = w.Fp; Fm = w.Fm; J = w.J; A = w.A; δ = w.δ
     n_unk = ncharge ? 4 : 3          # (yT, φ, ux, uy) or (yT, ux, uy)
@@ -407,11 +555,11 @@ function _cons_to_prim_attempt_2d!(w::PrimRecWork2D,
     slot = ncharge ? (1, 2, 3, 4) : (1, 3, 4, 4)
 
     evalF_2d!(F, x, D, Sx, Sy, E, nux, nuy, Pi, pixx, pixy, piyy, pieta, τ, eos;
-              ncharge = ncharge)
+              ncharge = ncharge, cache = ec)
     if !all(isfinite, F)
         w.last_reason = PRR_NONFINITE_INITIAL
         T = clamp(exp(x[1]), T_MIN, T_SOLVE_MAX); μ = hq_mass(eos)
-        P, _, e = eos_Pne(T, μ, eos)
+        P, _, e = eos_Pne_2d(T, μ, eos)
         return (T, μ, 0.0, 0.0, 0.0, max(e, 0.0), P, false)
     end
 
@@ -463,10 +611,10 @@ function _cons_to_prim_attempt_2d!(w::PrimRecWork2D,
 
             x[s] = xs + h
             evalF_2d!(Fp, x, D, Sx, Sy, E, nux, nuy, Pi, pixx, pixy, piyy, pieta, τ, eos;
-                      ncharge = ncharge)
+                      ncharge = ncharge, cache = ec)
             x[s] = xs - h
             evalF_2d!(Fm, x, D, Sx, Sy, E, nux, nuy, Pi, pixx, pixy, piyy, pieta, τ, eos;
-                      ncharge = ncharge)
+                      ncharge = ncharge, cache = ec)
             x[s] = xs
 
             if !(all(isfinite, Fp) && all(isfinite, Fm))
@@ -520,7 +668,7 @@ function _cons_to_prim_attempt_2d!(w::PrimRecWork2D,
             x[4] = clamp(x[4], -U_CAP_2D, U_CAP_2D)
 
             evalF_2d!(F, x, D, Sx, Sy, E, nux, nuy, Pi, pixx, pixy, piyy, pieta, τ, eos;
-                      ncharge = ncharge)
+                      ncharge = ncharge, cache = ec)
             if all(isfinite, F)
                 trial = 0.0
                 for r in r_lo:4
@@ -548,7 +696,7 @@ function _cons_to_prim_attempt_2d!(w::PrimRecWork2D,
     T  = clamp(exp(x[1]), T_MIN, T_SOLVE_MAX)
     μ  = ncharge ? (hq_mass(eos) + T*x[2]) : hq_mass(eos)
     ux = x[3]; uy = x[4]
-    P, n, e = eos_Pne(T, μ, eos)
+    P, n, e = eos_Pne_2d(T, μ, eos, ec)
 
     # ---- RESIDUAL IS THE ARBITER, NOT HOW THE LOOP EXITED ----------------
     # A converged state cannot be improved further, so the backtracking line
@@ -564,7 +712,7 @@ function _cons_to_prim_attempt_2d!(w::PrimRecWork2D,
 
     # residual-based acceptance on the final state
     evalF_2d!(F, x, D, Sx, Sy, E, nux, nuy, Pi, pixx, pixy, piyy, pieta, τ, eos;
-              ncharge = ncharge)
+              ncharge = ncharge, cache = ec)
     resnorm = 0.0
     for r in r_lo:4
         w.last_rows[r] = abs(scaled(r, F[r]))
@@ -577,10 +725,10 @@ function _cons_to_prim_attempt_2d!(w::PrimRecWork2D,
         hyd = max(w.last_rows[2], w.last_rows[3], w.last_rows[4])
         if ncharge && isfinite(hyd) && hyd < tol_res
             # rows 2-4 already converged: keep them, close row 1 on its own.
-            φb, okb = _solve_phi_bisect(D, T, ux, uy, nux, nuy, eos)
+            φb, okb = _solve_phi_bisect(D, T, ux, uy, nux, nuy, eos, ec)
             x[2] = clamp(φb, -PHI_CAP, PHI_CAP)
             μ = hq_mass(eos) + T*x[2]
-            P, n, e = eos_Pne(T, μ, eos)
+            P, n, e = eos_Pne_2d(T, μ, eos, ec)
             w.last_reason = okb ? PRR_CONVERGED : PRR_RESIDUAL_TOO_LARGE
             # The hydro block is trusted either way; that is the whole point.
             return (T, μ, ux, uy, max(n, 0.0), max(e, 0.0), P, true)
@@ -610,7 +758,7 @@ Forward map into column `col` of a conserved-state matrix. Returns
     Tc = max(T, T_MIN)
     uτ = sqrt(1 + ux*ux + uy*uy)
 
-    P, n, e = eos_Pne(Tc, μ, eos)
+    P, n, e = eos_Pne_2d(Tc, μ, eos)
     if !(isfinite3(P, n, e)) || e <= 0.0
         return false, PrimIdealVisc2D(Tc, μ, 0.0, 0.0, 0.0, 0.0, 0.0,
                                       nux, nuy, Pi, pixx, pixy, piyy, pieta, false)

@@ -36,6 +36,17 @@
 #
 # Gc6  `tauN_coeff != 1` is REFUSED with the closure on (it would break the
 #      τ_n = D_s h/T tie the sources rely on) and still allowed with it off.
+#
+# Gc7  THE SIGN, ON A SOLVE (2026-09-10). Gc1-Gc4 check the source VALUE at a
+#      fixed state, and the value was right while the solver put it on the wrong
+#      side of the equation for two days (added to the right-hand target instead of
+#      subtracted): every consistent term had the wrong sign, and Gc1-Gc6 all
+#      passed. Gc7 evolves a uniform Bjorken state carrying a uniform ν^x. With no
+#      transverse gradient the row is exactly
+#          τ_n dν/dτ = −(1 + b) ν,     b = τ_n θ + (D_s/T) h′ ∂_τT,   θ = 1/τ,
+#      whose collisionless limit is the Bjorken dilution ∂_τ(τν) = 0. The solver
+#      must follow that ODE (integrated here on the solver's own T(τ) history)
+#      and must NOT follow the sign-flipped −(1 − b)ν, which is what it did.
 # ==============================================================================
 
 using Printf
@@ -178,6 +189,8 @@ end
 # ------------------------------------------------------------------------------
 function gate_Gc3()
     println("\nGc3 — Bjorken limit: at rest with no gradients the source is pure dilution")
+    # The value checked here is the LHS-convention source, +τ_n ν/τ; the solver
+    # SUBTRACTS it from the target (Gc7 checks that on a solve).
     τ, T, n, τn, Ds, h, hp = 3.0, 0.30, 1.0, 0.7, 0.4, 2.2, -1.0
     nux, nuy = 0.02, -0.013
     uτ = 1.0
@@ -271,13 +284,65 @@ function gate_Gc6()
     return 0.0
 end
 
+# ------------------------------------------------------------------------------
+# Gc7 — the sign, on a solve
+# ------------------------------------------------------------------------------
+function gate_Gc7()
+    println("\nGc7 — Bjorken: an initial uniform ν^x must decay as τ_n dν/dτ = −(1 + b)ν")
+    T0, A0, TAU0, TAU1, DST = 0.40, -4.2, 0.4, 1.2, 0.1163
+    g = H2.make_grid2d(16, 16; xmax = 4.0, ymax = 4.0)
+    m = H2.build_model_2d(; eos = H2.LatticeHRGEOS(), enable_diff = true,
+                            kappa_coeff = DST, consistent_fm = true)
+    U = H2.allocate_state(g, m)
+    _, n0, _ = H2.eos_Pne(T0, A0*T0, m.eos)
+    for i in 1:g.Ntot
+        H2.set_cell!(U, i, T0, A0, 0.0, 0.0, TAU0, m; nux = 0.05*n0)
+    end
+    H2.finalize_ic!(U, g, m; τ0 = TAU0, bc = :periodic)
+    ic = H2.lin(g, g.nghost + 8, g.nghost + 8)
+    ts = Float64[]; νs = Float64[]; Ts = Float64[]; ns = Float64[]
+    dump = (τ, U, w) -> begin
+        (isempty(ts) || τ > ts[end]) || return
+        push!(ts, τ); push!(νs, H2.phys_from_stored(U[m.layout.iNux, ic]))
+        push!(Ts, exp(w.yT[ic])); push!(ns, w.n[ic])
+    end
+    H2.run_sim_2d!(U, g, m; τ0 = TAU0, τfinal = TAU1, bc = :periodic,
+                   on_dump = dump, dump_dt = 0.0, CFLτ = 0.005)
+    # the reference ODE for either sign, backward Euler on the solver's own history
+    function ode(sgn)
+        ν = νs[1]; out = [ν]
+        for k in 2:length(ts)
+            τ = ts[k-1]; dτ = ts[k] - ts[k-1]; T = Ts[k-1]
+            _, τn, _ = H2.diff_coeffs_2d(T, A0*T, ns[k-1], m)
+            _, hp = H2.hq_h_hprime_2d(T, m.eos)
+            Ds = (DST/T)/H2.fmGeV
+            b = τn/τ + (Ds/T)*hp*(Ts[k] - Ts[k-1])/dτ
+            ν = (τn/dτ*ν)/(τn/dτ + 1 + sgn*b)
+            push!(out, ν)
+        end
+        return out
+    end
+    phys = ode(+1.0); flip = ode(-1.0)
+    dev_phys = maximum(abs.(νs .- phys))/abs(νs[1])
+    dev_flip = maximum(abs.(νs .- flip))/abs(νs[1])
+    dil = ts[end]*νs[end]/(ts[1]*νs[1])
+    @printf("  %d steps; max|solver − ODE|/ν₀:  derived sign %.2e   flipped sign %.2e\n",
+            length(ts) - 1, dev_phys, dev_flip)
+    @printf("  τν/τ₀ν₀ at τ = %.1f: %.4f   (must be < 1 — the current dilutes faster than 1/τ)\n",
+            ts[end], dil)
+    @test dev_phys < 2e-3
+    @test dev_flip > 0.1
+    @test dil < 1.0
+    return dev_phys
+end
+
 function main()
     println("="^78)
     println("Gate Gc — the 2+1D thermodynamically consistent first moment")
     println("="^78)
     ok = true
     @testset "consistent first moment (2-D)" begin
-        gate_Gc1(); gate_Gc2(); gate_Gc3(); gate_Gc4(); gate_Gc5(); gate_Gc6()
+        gate_Gc1(); gate_Gc2(); gate_Gc3(); gate_Gc4(); gate_Gc5(); gate_Gc6(); gate_Gc7()
     end
     println("\n", "="^78)
     return ok

@@ -3,6 +3,13 @@
 #
 # Counterpart of the shear/bulk half of src/dissipation.jl.
 #
+# READING GUIDE. The equations as integrated, term by term with their switches
+# and gates: EQUATIONS2D.md (§2 shear, §3 bulk, §4 charge, §5 charm second
+# moment). In this file: `kinematics_2d` (θ, a^μ, ∇u — one definition for every
+# sector), the NS targets, then `relax_dissipative_2d!` and the four per-cell
+# updates `relax_{bulk,shear,charge,charm_m2}_cell_2d!`, each opening with the
+# equation it integrates. The derivations below are the long form.
+#
 # ------------------------------------------------------------------------------
 # THE SHEAR TARGET — derivation, and why it agrees with the 1-D code exactly
 # ------------------------------------------------------------------------------
@@ -253,11 +260,25 @@ function compute_alpha_grad_fv_2d!(work::Work2D, g::Grid2D; limiter = mc_limiter
 end
 
 # ---- the relaxation substep --------------------------------------------------
+#
+# One driver (`relax_dissipative_2d!`) and one function per sector per cell,
+# each opening with the equation it integrates:
+#
+#     relax_bulk_cell_2d!      τ_Π DΠ + Π = −ζθ
+#     relax_shear_cell_2d!     τ_π Δ Dπ^{ij} + π^{ij} = −2ησ^{ij} − δ_ππ θ π^{ij}
+#     relax_charge_cell_2d!    τ_n Δ Dν^i + ν^i = −κ∇^⟨i⟩α − s^i_consistent
+#     relax_charm_m2_cell_2d!  τ_M Δ Dπ_Q + π_Q + S(π_Q, …) = 0   (and Π_Q)
+#
+# Until 2026-09-10 these four were one 400-line threaded loop body; they were
+# split without changing a single floating-point operation (the regression
+# harness compares every field of five sector configurations bit for bit).
+# EQUATIONS2D.md is the term-by-term reference.
 
 """
     relax_dissipative_2d!(U, g, τ, Δ, model, work)
 
-Operator-split relaxation of `(Π, π^{ij}, ν^i)` toward their Navier–Stokes
+Operator-split relaxation of `(Π, π^{ij}, ν^i)` — and of the charm second moment
+`(π_Q^{ij}, Π_Q)` when `consistent_m2` is on — toward their Navier–Stokes
 targets, applied once at the end of a full RK step — the same splitting the 1-D
 solver uses (`src/timestepper.jl:139`).
 
@@ -293,7 +314,8 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
         return ux*dqx + uy*dqy
     end
 
-    @inbounds Threads.@threads for ix in (ng+1):(ng+g.Nx)
+    # :greedy for the same load-balance reason as `_primitive_pass!` (rhs2d.jl)
+    @inbounds Threads.@threads :greedy for ix in (ng+1):(ng+g.Nx)
         for iy in (ng+1):(ng+g.Ny)
             i = lin(g, ix, iy)
             work.ok[i] || continue
@@ -301,354 +323,22 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
             ux = work.ux[i]; uy = work.uy[i]
             uτ = sqrt(1 + ux*ux + uy*uy)
 
-            θ, ax, ay, aτ, dxux, dxuy, dyux, dyuy = kinematics_2d(work, g, i, Δ, τ)
+            # θ, a^i, a^τ and the four transverse velocity gradients, ONE
+            # definition shared by every sector below
+            kin = kinematics_2d(work, g, i, Δ, τ)
 
             T = exp(work.yT[i]); μ = work.mu[i]
             n = work.n[i]; e = work.e[i]; P = work.P[i]
 
-            # ---------------- bulk ----------------
-            Pi_new = L.hasPi ? phys_from_stored(U[L.iPi,i]) : 0.0
             if model.enable_bulk && L.hasPi
-                ζ, τΠ = bulk_coeffs_2d(T, μ, n, e, P, model)
-                ΠNS = -ζ*θ
-                A   = safe_div(τΠ*uτ, Δ)
-                advΠ = model.relax_advect_Pi ? -τΠ*upw(L.iPi, i, ux, uy) : 0.0
-                Pi_new = (A*Pi_new + ΠNS + advΠ)/(A + 1)
-                # POSITIVITY of the total pressure. Not a tuning knob: measured on
-                # the production IC with bulk+diffusion, |Pi|/P reached 3.50 and
-                # min(P+Pi) went NEGATIVE (-2.7e-4), which makes the effective
-                # enthalpy and the sound speed meaningless. Keep P + Pi > 0.
-                Pi_new = max(Pi_new, -0.99*max(P, 0.0))
-                if model.Pi_clip_factor > 0
-                    cap = model.Pi_clip_factor * abs(P)
-                    Pi_new = clamp(Pi_new, -cap, cap)
-                end
-                U[L.iPi,i] = stored_from_phys(Pi_new)
+                relax_bulk_cell_2d!(U, i, model, ux, uy, uτ, kin, T, μ, n, e, P, Δ, upw)
             end
-
-            # ---------------- shear ----------------
             if model.enable_shear && L.hasShear
-                η, τπ, δπ = shear_coeffs_2d(T, μ, n, e, P, model)
-
-                pixx = phys_from_stored(U[L.iPixx,i])
-                pixy = phys_from_stored(U[L.iPixy,i])
-                piyy = phys_from_stored(U[L.iPiyy,i])
-                pieta = phys_from_stored(U[L.iPieta,i])
-
-                nsxx, nsxy, nsyy, _ = ns_shear_target_2d(ux, uy, uτ, τ, θ, ax, ay,
-                                                         dxux, dxuy, dyux, dyuy, η)
-
-                # projected-comoving-derivative correction: c^j = π^{jβ}Du_β
-                Π = shear_tensor_contravariant_2d(ux, uy, uτ, τ, pixx, pixy, piyy, pieta)
-                cx = -Π.tx*aτ + Π.xx*ax + Π.xy*ay
-                cy = -Π.ty*aτ + Π.xy*ax + Π.yy*ay
-
-                A = safe_div(τπ*uτ, Δ)
-                # The second-order δ_ππθ term must not be able to cancel, let alone
-                # invert, the relaxation operator itself. Flooring at 1e-12 (as this
-                # did until 2026-09-08) turns a near-singular denominator into a
-                # ~1e12 amplification with nothing reporting it; flooring at half the
-                # first-order denominator bounds the term's effect at a factor 2.
-                # INERT in production — A ≈ 100 against |δ_ππθ| ≈ 2 — and the ladder
-                # is unchanged by it; it exists so that a compressive θ in a violent
-                # cell degrades gracefully instead of exploding silently.
-                den = max(A + 1 + δπ*θ, 0.5*(A + 1))
-
-                pd = model.shear_projected_deriv ? τπ : 0.0
-                ra = model.relax_advect_pi
-                axx = ra ? -τπ*upw(L.iPixx, i, ux, uy) : 0.0
-                axy = ra ? -τπ*upw(L.iPixy, i, ux, uy) : 0.0
-                ayy = ra ? -τπ*upw(L.iPiyy, i, ux, uy) : 0.0
-                pixx = (A*pixx + nsxx + pd*(2*ux*cx)      + axx) / den
-                pixy = (A*pixy + nsxy + pd*(ux*cy + uy*cx) + axy) / den
-                piyy = (A*piyy + nsyy + pd*(2*uy*cy)      + ayy) / den
-
-                if model.pi_clip_factor > 0
-                    cap = model.pi_clip_factor * abs(P)
-                    pixx = clamp(pixx, -cap, cap)
-                    pixy = clamp(pixy, -cap, cap)
-                    piyy = clamp(piyy, -cap, cap)
-                end
-
-                # tracelessness closes the system: pieta is DERIVED, never evolved
-                pieta_new, _ = project_shear_traceless_2d(ux, uy, uτ, pixx, pixy, piyy, pieta)
-
-                U[L.iPixx,i]  = stored_from_phys(pixx)
-                U[L.iPixy,i]  = stored_from_phys(pixy)
-                U[L.iPiyy,i]  = stored_from_phys(piyy)
-                U[L.iPieta,i] = stored_from_phys(pieta_new)
+                relax_shear_cell_2d!(U, i, model, ux, uy, uτ, τ, kin, T, μ, n, e, P, Δ, upw)
             end
-
-            # ---------------- charge diffusion ----------------
             if model.enable_diff && L.hasNu
-                wv = vacuum_weight_2d(n, model)
-                if wv <= 0.0
-                    # true-vacuum backstop: no charge, no current
-                    U[L.iNux,i] = 0.0
-                    U[L.iNuy,i] = 0.0
-                    continue
-                end
-
-                κ, τn, δN = diff_coeffs_2d(T, μ, n, model)
-
-                nux = phys_from_stored(U[L.iNux,i])
-                nuy = phys_from_stored(U[L.iNuy,i])
-
-                # ∇^{⟨i⟩}α = ∂_i α + u^i Dα, with the LIMITED gradient
-                dxa = work.gradAx[i]
-                dya = work.gradAy[i]
-                αp  = work.alpha_prev[i]
-                dta = isfinite(αp) ? (work.alpha[i] - αp)/Δ : 0.0
-
-                nsx, nsy = ns_diffusion_target_2d(ux, uy, uτ, dxa, dya, dta, κ)
-
-                # THE CONSISTENT FIRST MOMENT (src2d/hq_consistent_firstmoment2d.jl).
-                # The five full-∇P sources ride on the SAME vacuum ramp as ν_NS: they
-                # are part of the same drive, and leaving them unramped would push a
-                # current into exactly the dilute cells the ramp exists to protect
-                # (D6/D9 in TWOD_PROGRAM.md — an unramped drive out there is how
-                # |ν|/n diverges and the charge row goes degenerate).
-                if model.consistent_fm
-                    Tp = work.T_prev[i]
-                    # No previous step ⇒ no ∂_τT. Dropping it is the same choice
-                    # kinematics_2d makes for ∂_τu^i, and for the same reason:
-                    # differencing against a fiction manufactures a spurious source.
-                    dtT = isfinite(Tp) ? (T - Tp)/Δ : 0.0
-                    dxT = (exp(work.yT[i+g.Nytot]) - exp(work.yT[i-g.Nytot]))/(2*g.dx)
-                    dyT = (exp(work.yT[i+1])       - exp(work.yT[i-1]))/(2*g.dy)
-                    h, hp = hq_h_hprime_2d(T, model.eos)
-                    dn_dT = hq_dn_dT_2d(T, n, model.eos)
-                    Ds    = safe_div(model.kappa_coeff, T) / fmGeV   # D_s from D_sT
-                    csx, csy = consistent_fm_source_2d(ux, uy, uτ, T, dxT, dyT, dtT,
-                                                       nux, nuy, n, dn_dT, τn, Ds, h, hp,
-                                                       θ, ax, ay, dxux, dxuy, dyux, dyuy)
-                    nsx += csx; nsy += csy
-                end
-
-                nsx *= wv; nsy *= wv        # ramp the drive out through the tail
-
-                # 2026-09-02 (D9): ramp the RELAXATION TIME by the same weight,
-                # not just the drive.
-                #
-                # The ramp was written to kill ν_NS in the dilute tail, and that
-                # was sufficient only while τ_n was 6x too short (D8): killing the
-                # DRIVE killed the CURRENT, because ν relaxed to the new target
-                # within a step. At the corrected τ_n it does not. ν made earlier
-                # in the fluid is then FROZEN into the tail while n collapses
-                # around it, |ν|/n diverges, and the charge row `n u^τ + ν^τ = J^τ`
-                # goes degenerate -- D6's mechanism, reached from the other side.
-                # MEASURED at N=300 on the production IC: primfail 0 -> 12292 with
-                # the corrected τ_n, every failure in the tail, and turning
-                # diffusion off restores every field exactly.
-                #
-                # With τ_eff = wv τ_n the tail relaxes to wv ν_NS -> 0 FAST instead
-                # of freezing, and the deep-vacuum limit is ν -> 0 in one step.
-                #
-                # ⚠ NOT inert, and my first claim that it was "bitwise identical
-                # wherever the fluid is" was WRONG -- measured, not argued. The
-                # ramp band reaches ABOVE freeze-out: on the production IC at
-                # N=300 the minimum wv over cells with T > T_fo is 0.22 (0.41 at
-                # the old τ_n), so this acts where observables come from.
-                #
-                # What IS true, and is the licence:
-                #   * it does not move the FIXED POINT. Both variants relax toward
-                #     the same ramped target wv·ν_NS; only the approach rate
-                #     differs. A clip would move the answer; this moves the rate.
-                #   * in the regime where the solver was HEALTHY (the pre-D8 τ_n,
-                #     primfail 0 either way) the A/B is T 1.5e-6, n 1.4e-4,
-                #     ν 2.4e-3 -- it changes no conclusion there.
-                #   * at the corrected τ_n it is the difference between a run that
-                #     works and one that fails in 12292 cells.
-                # `vacuum_ramp_relax = false` reproduces the old behaviour for A/B.
-                # δ_N = deltaN_factor·τ_n by construction, so ramping τ_n without
-                # ramping δ_N would leave the two halves of the same relaxation
-                # operator on different clocks. Inert at the default
-                # deltaN_factor = 0, but wrong the moment anyone sets it.
-                if model.vacuum_ramp_relax
-                    τn = wv*τn; δN = wv*δN
-                end
-
-                # projected-derivative correction: ν·a with ν^τ from orthogonality
-                nut = nu_tau_2d(ux, uy, uτ, nux, nuy)
-                nua = -nut*aτ + nux*ax + nuy*ay
-
-                A = safe_div(τn*uτ, Δ)
-                den = max(A + 1 + δN*θ, 0.5*(A + 1))   # see the shear block above
-
-                pdn = model.diff_projected_deriv ? τn : 0.0
-                anx = model.relax_advect_nu ? -τn*upw(L.iNux, i, ux, uy) : 0.0
-                any_ = model.relax_advect_nu ? -τn*upw(L.iNuy, i, ux, uy) : 0.0
-                nux = (A*nux + nsx + pdn*ux*nua + anx) / den
-                nuy = (A*nuy + nsy + pdn*uy*nua + any_) / den
-
-                # causality guard, as in the 1-D `nur_clip_factor`
-                if model.nu_clip_factor > 0
-                    cap = model.nu_clip_factor * max(n, 0.0) * uτ
-                    mag = hypot(nux, nuy)
-                    if mag > cap && mag > TINY
-                        sc = cap/mag
-                        nux *= sc; nuy *= sc
-                    end
-                end
-
-                U[L.iNux,i] = stored_from_phys(nux)
-                U[L.iNuy,i] = stored_from_phys(nuy)
-
-                # ── THE CHARM SECOND MOMENT (src2d/hq_consistent_m2_2d.jl) ────────
-                # Passive at c_M = 0: it reads the current and the medium but feeds
-                # back into neither, so it relaxes here and never enters primitive
-                # recovery or the fluxes. Backward Euler on the same pattern as the
-                # medium shear, with the source supplying the drive.
-                if model.consistent_m2 && L.hasM2
-                    pQxx = phys_from_stored(U[L.iPQxx,i]); pQxy = phys_from_stored(U[L.iPQxy,i])
-                    pQyy = phys_from_stored(U[L.iPQyy,i]); pQeta = phys_from_stored(U[L.iPQeta,i])
-                    PiQv = phys_from_stored(U[L.iPiQ,i])
-                    # the TRANSPORT charm mass -- see `transport_mass` in primitives2d.jl
-                    mq_transport = model.transport_mass > 0.0 ? model.transport_mass :
-                                                                hq_mass(model.eos)
-                    τMq = tauM_charm_2d(T, τn)
-                    # 🔴 2026-09-09. SKIP the update until the D_tau history exists.
-                    # On the first substep `alpha_prev` and `T_prev` are NaN-seeded,
-                    # so `dta` and `dtT2` fall back to ZERO and the row is driven by
-                    # a D alpha and a D ln T that are not merely inaccurate but
-                    # ABSENT. Those two are the dominant terms of the trace channel
-                    # (etabar*(A/B DlnT + 5/3 theta + D alpha) with A/B ~ 6.8), and
-                    # with both zeroed the instantaneous fixed point comes out
-                    # -0.169 against a steady -0.011: a FIFTEENFOLD overshoot on
-                    # step one. Measured, Pi_Q then spends the whole run climbing
-                    # back out of that hole and crosses zero at tau ~ 0.55, ending
-                    # POSITIVE where the drive and the closed-form fixed point are
-                    # both NEGATIVE -- which is exactly the cos = -0.995 against
-                    # Fluidum. Starting the moments one step later costs nothing:
-                    # they are initialised to zero anyway and tau_M ~ 0.26 fm is
-                    # many steps.
-                    have_hist = isfinite(work.alpha_prev[i]) && isfinite(work.T_prev[i])
-                    if τMq > 0.0 && have_hist
-                        # a_ν^i = Dν^i, from the pre-relaxation snapshot so every
-                        # cell sees the same stage (the reason `Q` exists).
-                        dtnx = isfinite(work.nux_prev[i]) ? (nux - work.nux_prev[i])/Δ : 0.0
-                        dtny = isfinite(work.nuy_prev[i]) ? (nuy - work.nuy_prev[i])/Δ : 0.0
-                        ixm = i - g.Nytot; ixp = i + g.Nytot
-                        dxnx = (phys_from_stored(Q[L.iNux,ixp]) - phys_from_stored(Q[L.iNux,ixm]))*0.5*invdx
-                        dxny = (phys_from_stored(Q[L.iNuy,ixp]) - phys_from_stored(Q[L.iNuy,ixm]))*0.5*invdx
-                        dynx = (phys_from_stored(Q[L.iNux,i+1]) - phys_from_stored(Q[L.iNux,i-1]))*0.5*invdy
-                        dyny = (phys_from_stored(Q[L.iNuy,i+1]) - phys_from_stored(Q[L.iNuy,i-1]))*0.5*invdy
-                        dtux2 = isfinite(work.ux_prev[i]) ? (ux - work.ux_prev[i])/Δ : 0.0
-                        dtuy2 = isfinite(work.uy_prev[i]) ? (uy - work.uy_prev[i])/Δ : 0.0
-                        aνx = uτ*dtnx + ux*dxnx + uy*dynx
-                        aνy = uτ*dtny + ux*dxny + uy*dyny
-                        nut2 = nu_tau_2d(ux, uy, uτ, nux, nuy)
-                        # theta_nu = d_mu nu^mu. The tau-row is d_tau of
-                        # nu^tau = (u.nu)/u^tau, and that is a QUOTIENT: the
-                        # denominator carries u^tau(tau) too. FiVo dropped the
-                        # second half of the quotient rule here until 2026-09-09 --
-                        # the -nu^tau (u^x dtu^x + u^y dtu^y)/(u^tau)^2 below --
-                        # which Fluidum's `thnu` has always had. It is invisible to
-                        # the RHS gates, which take theta_nu as an INPUT rather than
-                        # building it, and it hits the TRACE channel hardest because
-                        # zeta_Q*theta_nu is that row's dominant drive: it left Pi_Q
-                        # a factor ~10 low against Fluidum on the physical IC.
-                        θν  = (ux*dtnx + uy*dtny + nux*dtux2 + nuy*dtuy2)*safe_inv(uτ) -
-                              nut2*(ux*dtux2 + uy*dtuy2)*safe_inv(uτ*uτ) +
-                              dxnx + dyny + nut2*safe_inv(τ)
-                        # T gradients, computed here so the m2 sector does not
-                        # depend on the consistent_fm block having run.
-                        Tp2   = work.T_prev[i]
-                        dtT2  = isfinite(Tp2) ? (T - Tp2)/Δ : 0.0
-                        dxT2  = (exp(work.yT[ixp]) - exp(work.yT[ixm]))*0.5*invdx
-                        dyT2  = (exp(work.yT[i+1]) - exp(work.yT[i-1]))*0.5*invdy
-                        h2, hp2 = hq_h_hprime_2d(T, model.eos)
-                        Ds2 = safe_div(model.kappa_coeff, T) / fmGeV
-                        sxx, sxy, syy, sB, geo2 = consistent_m2_source_2d(
-                            ux, uy, uτ, τ, T, dxT2, dyT2, dtT2,
-                            nux, nuy, pQxx, pQxy, pQyy, pQeta, PiQv,
-                            dta, dxa, dya, θν, aνx, aνy, dtnx, dtny,
-                            dxnx, dxny, dynx, dyny,
-                            θ, ax, ay, dtux2, dtuy2, dxux, dxuy, dyux, dyuy,
-                            n, τn, Ds2, h2, hp2, τMq, ηM_charm_2d(T, τn), mq_transport)
-                        # ── backward Euler on  tau_M u^tau d_tau X = -S(X) ──────────
-                        # 🔴 2026-09-09. This block used to read
-                        #     X_new = (A2*X_old + tau_M u^tau * s) / (A2 + 1)
-                        # and that DOUBLE-COUNTS the field. `consistent_m2_source_2d`
-                        # returns s = -S/(tau_M u^tau), and S is AFFINE IN X with the
-                        # field appearing bare at the front of every channel:
-                        #     S = (1 + geo)*X + R,   geo = tau_M*(5/3 theta + DlnC)
-                        # (`sxx = pxx + ...`, `sB = PiQ + ...`). So tau_M u^tau * s
-                        # = -(1+geo)*X_old - R, and the old numerator was
-                        #     A2*X_old - (1+geo)*X_old - R
-                        # i.e. an extra -(1+geo)*X_old against the exact implicit solve
-                        #     X_new = (A2*X_old - R) / (A2 + 1 + geo).
-                        # The error VANISHES as A2 -> infinity and is O(1) at
-                        # production steps (A2 ~ 5 gives a factor 0.67), so it survived
-                        # every RHS gate -- those evaluate the SOURCE at a state and
-                        # never step it -- and it does not go away under refinement,
-                        # which is exactly what the FiVo-vs-Fluidum solve comparison
-                        # measured: pi_Q^xx amplitude ratio 0.57 and Pi_Q 0.076 against
-                        # Fluidum, growing from cos = 1.00000 four steps out of the IC.
-                        # Recover R by adding the field term back, then solve exactly.
-                        # 🔴 2026-09-09 (second pass). The affine coefficient is NOT
-                        # (1 + geo). Every channel is affine in its OWN field with
-                        # coefficient (1 + geo) from the explicit `X + geo*X` terms
-                        # PLUS a contribution from the class-(iii) coupling
-                        # pi^{(i}_lambda sigma^{j)lambda}, which is also linear in pi.
-                        # Measured at a representative state: the true coefficient is
-                        # 1.6474 against (1 + geo) = 1.4706 -- a 12% error in the
-                        # relaxation rate, which is exactly the size of the residual
-                        # that survived normalising pi_Q^xx by each code's own
-                        # eta_bar (0.733). Both codes' RATES agree to all digits
-                        # (d(rate)/d(pxx) = -6.243942 in each), so this was purely an
-                        # error in FiVo's implicit SOLVE, invisible to every RHS gate.
-                        #
-                        # Rather than re-derive the coefficient analytically, MEASURE
-                        # it: the row is exactly affine in its own field (the system
-                        # is quasi-linear), so one extra source evaluation at a
-                        # perturbed field gives the slope to round-off, and the
-                        # implicit step is then exact rather than approximate.
-                        A2   = safe_div(τMq*uτ, Δ)
-                        # ONE perturbation PER CHANNEL: perturbing all four at once
-                        # would fold the cross-couplings (pi^xx feeds the trace through
-                        # pi:sigma) into what is meant to be the diagonal coefficient.
-                        δp = 1e-7 * max(one(pQxx), abs(pQxx), abs(pQxy),
-                                        abs(pQyy), abs(PiQv))
-                        m2at(a, b, c, e) = consistent_m2_source_2d(
-                            ux, uy, uτ, τ, T, dxT2, dyT2, dtT2,
-                            nux, nuy, a, b, c, pQeta, e,
-                            dta, dxa, dya, θν, aνx, aνy, dtnx, dtny,
-                            dxnx, dxny, dynx, dyny,
-                            θ, ax, ay, dtux2, dtuy2, dxux, dxuy, dyux, dyuy,
-                            n, τn, Ds2, h2, hp2, τMq, ηM_charm_2d(T, τn), mq_transport)
-                        # d(rate)/d(field) = -c/(tau_M u^tau)  =>  c = -slope*tau_M*u^tau
-                        cxx = -(m2at(pQxx+δp, pQxy, pQyy, PiQv)[1] - sxx)/δp * τMq*uτ
-                        cxy = -(m2at(pQxx, pQxy+δp, pQyy, PiQv)[2] - sxy)/δp * τMq*uτ
-                        cyy = -(m2at(pQxx, pQxy, pQyy+δp, PiQv)[3] - syy)/δp * τMq*uτ
-                        cB  = -(m2at(pQxx, pQxy, pQyy, PiQv+δp)[4] - sB )/δp * τMq*uτ
-                        dn(c) = max(A2 + c, 0.5*(A2 + 1))   # as the shear block guards
-                        # tau_M u^i d_i X: the transverse half of tau_M u^mu d_mu X.
-                        # These fields carry no flux entries, so without this the
-                        # second moment was advected by NOTHING -- see the note on
-                        # `relax_advect_m2` in primitives2d.jl.
-                        ram  = model.relax_advect_m2
-                        amxx = ram ? -τMq*upw(L.iPQxx, i, ux, uy) : 0.0
-                        amxy = ram ? -τMq*upw(L.iPQxy, i, ux, uy) : 0.0
-                        amyy = ram ? -τMq*upw(L.iPQyy, i, ux, uy) : 0.0
-                        amB  = ram ? -τMq*upw(L.iPiQ,  i, ux, uy) : 0.0
-                        Rxx  = -τMq*uτ*sxx - cxx*pQxx - amxx
-                        Rxy  = -τMq*uτ*sxy - cxy*pQxy - amxy
-                        Ryy  = -τMq*uτ*syy - cyy*pQyy - amyy
-                        RB   = -τMq*uτ*sB  - cB *PiQv  - amB
-                        pQxx = (A2*pQxx - Rxx) / dn(cxx)
-                        pQxy = (A2*pQxy - Rxy) / dn(cxy)
-                        pQyy = (A2*pQyy - Ryy) / dn(cyy)
-                        PiQv = (A2*PiQv - RB)  / dn(cB)
-                        # tracelessness: correct pQeta alone, as the medium shear does
-                        pQeta, _ = project_shear_traceless_2d(ux, uy, uτ, pQxx, pQxy, pQyy, pQeta)
-                        U[L.iPQxx,i]  = stored_from_phys(pQxx)
-                        U[L.iPQxy,i]  = stored_from_phys(pQxy)
-                        U[L.iPQyy,i]  = stored_from_phys(pQyy)
-                        U[L.iPQeta,i] = stored_from_phys(pQeta)
-                        U[L.iPiQ,i]   = stored_from_phys(PiQv)
-                    end
-                end
+                relax_charge_cell_2d!(U, Q, i, g, work, model, ux, uy, uτ, τ, kin, T, μ, n,
+                                      Δ, upw, invdx, invdy)
             end
         end
     end
@@ -670,4 +360,470 @@ function relax_dissipative_2d!(U::AbstractMatrix, g::Grid2D, τ::Float64, Δ::Fl
 
 
     return g.Nx*g.Ny
+end
+
+# ------------------------------------------------------------------------------
+# bulk
+# ------------------------------------------------------------------------------
+"""
+    relax_bulk_cell_2d!(U, i, model, ux, uy, uτ, kin, T, μ, n, e, P, Δ, upw)
+
+    τ_Π (u^τ ∂_τ + u^k ∂_k) Π + Π = −ζ θ
+
+Backward Euler in `u^τ∂_τ` (`A = τ_Π u^τ/Δ`), the transverse advection upwinded
+from the pre-relaxation snapshot (`relax_advect_Pi`), then the positivity guard
+`P + Π > 0` and the optional `Pi_clip_factor`.
+"""
+@inline function relax_bulk_cell_2d!(U::AbstractMatrix, i::Int, model::IdealDiffVisc2DModel,
+                                     ux::Float64, uy::Float64, uτ::Float64, kin,
+                                     T::Float64, μ::Float64, n::Float64, e::Float64, P::Float64,
+                                     Δ::Float64, upw)
+    L = model.layout
+    θ = kin[1]
+    @inbounds begin
+        Pi_new = phys_from_stored(U[L.iPi,i])
+        ζ, τΠ = bulk_coeffs_2d(T, μ, n, e, P, model)
+        ΠNS = -ζ*θ
+        A   = safe_div(τΠ*uτ, Δ)
+        advΠ = model.relax_advect_Pi ? -τΠ*upw(L.iPi, i, ux, uy) : 0.0
+        Pi_new = (A*Pi_new + ΠNS + advΠ)/(A + 1)
+        # POSITIVITY of the total pressure. Not a tuning knob: measured on
+        # the production IC with bulk+diffusion, |Pi|/P reached 3.50 and
+        # min(P+Pi) went NEGATIVE (-2.7e-4), which makes the effective
+        # enthalpy and the sound speed meaningless. Keep P + Pi > 0.
+        Pi_new = max(Pi_new, -0.99*max(P, 0.0))
+        if model.Pi_clip_factor > 0
+            cap = model.Pi_clip_factor * abs(P)
+            Pi_new = clamp(Pi_new, -cap, cap)
+        end
+        U[L.iPi,i] = stored_from_phys(Pi_new)
+    end
+    return nothing
+end
+
+# ------------------------------------------------------------------------------
+# shear
+# ------------------------------------------------------------------------------
+"""
+    relax_shear_cell_2d!(U, i, model, ux, uy, uτ, τ, kin, T, μ, n, e, P, Δ, upw)
+
+    τ_π (u^τ ∂_τ + u^k ∂_k) π^{ij} + π^{ij}
+        = −2η σ^{ij} − δ_ππ θ π^{ij} + τ_π (u^i c^j + u^j c^i),   c^j = π^{jβ} a_β
+
+(the last term is the projector `Δ^{ij}_{αβ}` acting on `Dπ^{αβ}`, see this file's
+header). Evolves the transverse block `(π^{xx}, π^{xy}, π^{yy})`; `π^η_η` is then
+restored from tracelessness, never evolved.
+"""
+@inline function relax_shear_cell_2d!(U::AbstractMatrix, i::Int, model::IdealDiffVisc2DModel,
+                                      ux::Float64, uy::Float64, uτ::Float64, τ::Float64, kin,
+                                      T::Float64, μ::Float64, n::Float64, e::Float64, P::Float64,
+                                      Δ::Float64, upw)
+    L = model.layout
+    θ, ax, ay, aτ, dxux, dxuy, dyux, dyuy = kin
+    @inbounds begin
+        η, τπ, δπ = shear_coeffs_2d(T, μ, n, e, P, model)
+
+        pixx = phys_from_stored(U[L.iPixx,i])
+        pixy = phys_from_stored(U[L.iPixy,i])
+        piyy = phys_from_stored(U[L.iPiyy,i])
+        pieta = phys_from_stored(U[L.iPieta,i])
+
+        nsxx, nsxy, nsyy, _ = ns_shear_target_2d(ux, uy, uτ, τ, θ, ax, ay,
+                                                 dxux, dxuy, dyux, dyuy, η)
+
+        # projected-comoving-derivative correction: c^j = π^{jβ}Du_β
+        Π = shear_tensor_contravariant_2d(ux, uy, uτ, τ, pixx, pixy, piyy, pieta)
+        cx = -Π.tx*aτ + Π.xx*ax + Π.xy*ay
+        cy = -Π.ty*aτ + Π.xy*ax + Π.yy*ay
+
+        A = safe_div(τπ*uτ, Δ)
+        # The second-order δ_ππθ term must not be able to cancel, let alone
+        # invert, the relaxation operator itself. Flooring at 1e-12 (as this
+        # did until 2026-09-08) turns a near-singular denominator into a
+        # ~1e12 amplification with nothing reporting it; flooring at half the
+        # first-order denominator bounds the term's effect at a factor 2.
+        # INERT in production — A ≈ 100 against |δ_ππθ| ≈ 2 — and the ladder
+        # is unchanged by it; it exists so that a compressive θ in a violent
+        # cell degrades gracefully instead of exploding silently.
+        den = max(A + 1 + δπ*θ, 0.5*(A + 1))
+
+        pd = model.shear_projected_deriv ? τπ : 0.0
+        ra = model.relax_advect_pi
+        axx = ra ? -τπ*upw(L.iPixx, i, ux, uy) : 0.0
+        axy = ra ? -τπ*upw(L.iPixy, i, ux, uy) : 0.0
+        ayy = ra ? -τπ*upw(L.iPiyy, i, ux, uy) : 0.0
+        pixx = (A*pixx + nsxx + pd*(2*ux*cx)      + axx) / den
+        pixy = (A*pixy + nsxy + pd*(ux*cy + uy*cx) + axy) / den
+        piyy = (A*piyy + nsyy + pd*(2*uy*cy)      + ayy) / den
+
+        if model.pi_clip_factor > 0
+            cap = model.pi_clip_factor * abs(P)
+            pixx = clamp(pixx, -cap, cap)
+            pixy = clamp(pixy, -cap, cap)
+            piyy = clamp(piyy, -cap, cap)
+        end
+
+        # tracelessness closes the system: pieta is DERIVED, never evolved
+        pieta_new, _ = project_shear_traceless_2d(ux, uy, uτ, pixx, pixy, piyy, pieta)
+
+        U[L.iPixx,i]  = stored_from_phys(pixx)
+        U[L.iPixy,i]  = stored_from_phys(pixy)
+        U[L.iPiyy,i]  = stored_from_phys(piyy)
+        U[L.iPieta,i] = stored_from_phys(pieta_new)
+    end
+    return nothing
+end
+
+# ------------------------------------------------------------------------------
+# charge diffusion (the charm first moment)
+# ------------------------------------------------------------------------------
+"""
+    relax_charge_cell_2d!(U, Q, i, g, work, model, ux, uy, uτ, τ, kin, T, μ, n,
+                          Δ, upw, invdx, invdy)
+
+    τ_n (u^τ ∂_τ + u^k ∂_k) ν^i + ν^i
+        = w·[ −κ ∇^⟨i⟩α − s^i_consistent ] + τ_n u^i (ν·a)
+
+with `w` the density-gated vacuum ramp (which also ramps `τ_n`, D9), `s` the
+consistent first-moment sources (`consistent_fm`, SOURCE-ON-THE-LHS, hence the
+minus), and the last term the projector acting on `Dν`. Every drive term is
+behind a `Terms2D` switch. Then the charm second moment of the same cell, if
+`consistent_m2` is on (`relax_charm_m2_cell_2d!`).
+"""
+@inline function relax_charge_cell_2d!(U::AbstractMatrix, Q::AbstractMatrix, i::Int,
+                                       g::Grid2D, work::Work2D, model::IdealDiffVisc2DModel,
+                                       ux::Float64, uy::Float64, uτ::Float64, τ::Float64, kin,
+                                       T::Float64, μ::Float64, n::Float64,
+                                       Δ::Float64, upw, invdx::Float64, invdy::Float64)
+    L = model.layout
+    θ, ax, ay, aτ, dxux, dxuy, dyux, dyuy = kin
+    @inbounds begin
+        wv = vacuum_weight_2d(n, model)
+        if wv <= 0.0
+            # true-vacuum backstop: no charge, no current
+            U[L.iNux,i] = 0.0
+            U[L.iNuy,i] = 0.0
+            return nothing
+        end
+
+        κ, τn, δN = diff_coeffs_2d(T, μ, n, model)
+
+        nux = phys_from_stored(U[L.iNux,i])
+        nuy = phys_from_stored(U[L.iNuy,i])
+
+        # ∇^{⟨i⟩}α = ∂_i α + u^i Dα, with the LIMITED gradient
+        dxa = work.gradAx[i]
+        dya = work.gradAy[i]
+        αp  = work.alpha_prev[i]
+        dta = isfinite(αp) ? (work.alpha[i] - αp)/Δ : 0.0
+
+        # −κ∇^⟨i⟩α, the fugacity drive (the whole drive of the shipped row)
+        nsx, nsy = model.terms.nu_gradalpha ?
+                   ns_diffusion_target_2d(ux, uy, uτ, dxa, dya, dta, κ) : (0.0, 0.0)
+
+        # THE CONSISTENT FIRST MOMENT (src2d/hq_consistent_firstmoment2d.jl).
+        # The five full-∇P sources ride on the SAME vacuum ramp as ν_NS: they
+        # are part of the same drive, and leaving them unramped would push a
+        # current into exactly the dilute cells the ramp exists to protect
+        # (D6/D9 in TWOD_PROGRAM.md — an unramped drive out there is how
+        # |ν|/n diverges and the charge row goes degenerate).
+        if model.consistent_fm
+            Tp = work.T_prev[i]
+            # No previous step ⇒ no ∂_τT. Dropping it is the same choice
+            # kinematics_2d makes for ∂_τu^i, and for the same reason:
+            # differencing against a fiction manufactures a spurious source.
+            dtT = isfinite(Tp) ? (T - Tp)/Δ : 0.0
+            dxT = (exp(work.yT[i+g.Nytot]) - exp(work.yT[i-g.Nytot]))/(2*g.dx)
+            dyT = (exp(work.yT[i+1])       - exp(work.yT[i-1]))/(2*g.dy)
+            h, hp = hq_h_hprime_2d(T, model.eos)
+            dn_dT = hq_dn_dT_2d(T, n, model.eos)
+            Ds    = safe_div(model.kappa_coeff, T) / fmGeV   # D_s from D_sT
+            csx, csy = consistent_fm_source_2d(ux, uy, uτ, T, dxT, dyT, dtT,
+                                               nux, nuy, n, dn_dT, τn, Ds, h, hp,
+                                               θ, ax, ay, dxux, dxuy, dyux, dyuy;
+                                               terms = model.terms)
+            # 🔴 2026-09-10. SUBTRACT, not add. The source is returned in the
+            # SOURCE-ON-THE-LHS convention of the row it was derived from,
+            #     τ_n Δ Dν + ν + κ∇^⟨i⟩α + s = 0 ,
+            # exactly as the 1-D `hq_consistent_extras` (added to src[2] of a
+            # system whose update is dU = −At⁻¹(src + …), main2IS2.jl) and
+            # Fluidum's `hq2d_matrices_consistent` (header: "source-on-the-LHS")
+            # use it. This relaxation's numerator is the RIGHT-hand side, so
+            # `s` enters it with a minus. It read `nsx += csx` from 2026-09-08
+            # until today: every consistent term had the wrong sign, the
+            # expansion term τ_n θ ν ANTI-damped the current instead of diluting
+            # it, and the at-rest T drive pushed charm UP the temperature
+            # gradient. MEASURED on a uniform Bjorken state with an initial
+            # uniform ν^x: τ·ν^x GREW 1.00 -> 1.63 over τ = 0.4 -> 1.2, and the
+            # solver tracked τ_n dν/dτ = −(1 − b)ν to 1e-3 where the derived row
+            # is −(1 + b)ν (b = τ_nθ + (D_s/T)h′DT ≈ 0.95 at τ = 0.4). Every
+            # RHS gate compares the SOURCE at a fixed state, and the source was
+            # right; only how the update consumes it was wrong — the same blind
+            # spot as the second moment's four update defects of 2026-09-09.
+            # Gate Gc7 (test_consistent_fm2d.jl) now evolves that Bjorken state.
+            nsx -= csx; nsy -= csy
+        end
+
+        nsx *= wv; nsy *= wv        # ramp the drive out through the tail
+
+        # 2026-09-02 (D9): ramp the RELAXATION TIME by the same weight,
+        # not just the drive.
+        #
+        # The ramp was written to kill ν_NS in the dilute tail, and that
+        # was sufficient only while τ_n was 6x too short (D8): killing the
+        # DRIVE killed the CURRENT, because ν relaxed to the new target
+        # within a step. At the corrected τ_n it does not. ν made earlier
+        # in the fluid is then FROZEN into the tail while n collapses
+        # around it, |ν|/n diverges, and the charge row `n u^τ + ν^τ = J^τ`
+        # goes degenerate -- D6's mechanism, reached from the other side.
+        # MEASURED at N=300 on the production IC: primfail 0 -> 12292 with
+        # the corrected τ_n, every failure in the tail, and turning
+        # diffusion off restores every field exactly.
+        #
+        # With τ_eff = wv τ_n the tail relaxes to wv ν_NS -> 0 FAST instead
+        # of freezing, and the deep-vacuum limit is ν -> 0 in one step.
+        #
+        # ⚠ NOT inert, and my first claim that it was "bitwise identical
+        # wherever the fluid is" was WRONG -- measured, not argued. The
+        # ramp band reaches ABOVE freeze-out: on the production IC at
+        # N=300 the minimum wv over cells with T > T_fo is 0.22 (0.41 at
+        # the old τ_n), so this acts where observables come from.
+        #
+        # What IS true, and is the licence:
+        #   * it does not move the FIXED POINT. Both variants relax toward
+        #     the same ramped target wv·ν_NS; only the approach rate
+        #     differs. A clip would move the answer; this moves the rate.
+        #   * in the regime where the solver was HEALTHY (the pre-D8 τ_n,
+        #     primfail 0 either way) the A/B is T 1.5e-6, n 1.4e-4,
+        #     ν 2.4e-3 -- it changes no conclusion there.
+        #   * at the corrected τ_n it is the difference between a run that
+        #     works and one that fails in 12292 cells.
+        # `vacuum_ramp_relax = false` reproduces the old behaviour for A/B.
+        # δ_N = deltaN_factor·τ_n by construction, so ramping τ_n without
+        # ramping δ_N would leave the two halves of the same relaxation
+        # operator on different clocks. Inert at the default
+        # deltaN_factor = 0, but wrong the moment anyone sets it.
+        if model.vacuum_ramp_relax
+            τn = wv*τn; δN = wv*δN
+        end
+
+        # projected-derivative correction: ν·a with ν^τ from orthogonality
+        nut = nu_tau_2d(ux, uy, uτ, nux, nuy)
+        nua = -nut*aτ + nux*ax + nuy*ay
+
+        A = safe_div(τn*uτ, Δ)
+        den = max(A + 1 + δN*θ, 0.5*(A + 1))   # see the shear block above
+
+        pdn = model.diff_projected_deriv ? τn : 0.0
+        anx = model.relax_advect_nu ? -τn*upw(L.iNux, i, ux, uy) : 0.0
+        any_ = model.relax_advect_nu ? -τn*upw(L.iNuy, i, ux, uy) : 0.0
+        nux = (A*nux + nsx + pdn*ux*nua + anx) / den
+        nuy = (A*nuy + nsy + pdn*uy*nua + any_) / den
+
+        # causality guard, as in the 1-D `nur_clip_factor`
+        if model.nu_clip_factor > 0
+            cap = model.nu_clip_factor * max(n, 0.0) * uτ
+            mag = hypot(nux, nuy)
+            if mag > cap && mag > TINY
+                sc = cap/mag
+                nux *= sc; nuy *= sc
+            end
+        end
+
+        U[L.iNux,i] = stored_from_phys(nux)
+        U[L.iNuy,i] = stored_from_phys(nuy)
+
+        # ⚠ The second moment is handed the RAMPED τ_n (τn = wv·τ_n above when
+        # vacuum_ramp_relax is on), so in the ramp band n < vacuum_n_hi its τ_M, η_M
+        # and η̄ are scaled by the same weight. Identical to 1 wherever the fluid is
+        # dense; recorded (2026-09-10) because nothing said so.
+        if model.consistent_m2 && L.hasM2
+            relax_charm_m2_cell_2d!(U, Q, i, g, work, model, ux, uy, uτ, τ, kin, T, n, τn,
+                                    nux, nuy, dta, dxa, dya, Δ, upw, invdx, invdy)
+        end
+    end
+    return nothing
+end
+
+# ------------------------------------------------------------------------------
+# the charm second moment
+# ------------------------------------------------------------------------------
+"""
+    relax_charm_m2_cell_2d!(U, Q, i, g, work, model, ux, uy, uτ, τ, kin, T, n, τn,
+                            nux, nuy, dta, dxa, dya, Δ, upw, invdx, invdy)
+
+    τ_M (u^τ ∂_τ + u^k ∂_k) X + S(X) = 0,    X ∈ {π_Q^{xx}, π_Q^{xy}, π_Q^{yy}, Π_Q}
+
+with `S` from `consistent_m2_source_2d` (every term behind a `Terms2D` switch).
+Each channel is affine in its own field; its coefficient is MEASURED by one extra
+source evaluation and the backward-Euler step is then exact. `π_Q^η_η` is
+restored from tracelessness. Passive at c_M = 0: reads the current and the
+medium, feeds back into neither.
+"""
+@inline function relax_charm_m2_cell_2d!(U::AbstractMatrix, Q::AbstractMatrix, i::Int,
+                                         g::Grid2D, work::Work2D, model::IdealDiffVisc2DModel,
+                                         ux::Float64, uy::Float64, uτ::Float64, τ::Float64, kin,
+                                         T::Float64, n::Float64, τn::Float64,
+                                         nux::Float64, nuy::Float64,
+                                         dta::Float64, dxa::Float64, dya::Float64,
+                                         Δ::Float64, upw, invdx::Float64, invdy::Float64)
+    L = model.layout
+    θ, ax, ay, aτ, dxux, dxuy, dyux, dyuy = kin
+    @inbounds begin
+        # ── THE CHARM SECOND MOMENT (src2d/hq_consistent_m2_2d.jl) ────────
+        # Passive at c_M = 0: it reads the current and the medium but feeds
+        # back into neither, so it relaxes here and never enters primitive
+        # recovery or the fluxes. Backward Euler on the same pattern as the
+        # medium shear, with the source supplying the drive.
+        pQxx = phys_from_stored(U[L.iPQxx,i]); pQxy = phys_from_stored(U[L.iPQxy,i])
+        pQyy = phys_from_stored(U[L.iPQyy,i]); pQeta = phys_from_stored(U[L.iPQeta,i])
+        PiQv = phys_from_stored(U[L.iPiQ,i])
+        # the TRANSPORT charm mass -- see `transport_mass` in primitives2d.jl
+        mq_transport = model.transport_mass > 0.0 ? model.transport_mass :
+                                                    hq_mass(model.eos)
+        τMq = tauM_charm_2d(T, τn, mq_transport)
+        # 🔴 2026-09-09. SKIP the update until the D_tau history exists.
+        # On the first substep `alpha_prev` and `T_prev` are NaN-seeded,
+        # so `dta` and `dtT2` fall back to ZERO and the row is driven by
+        # a D alpha and a D ln T that are not merely inaccurate but
+        # ABSENT. Those two are the dominant terms of the trace channel
+        # (etabar*(A/B DlnT + 5/3 theta + D alpha) with A/B ~ 6.8), and
+        # with both zeroed the instantaneous fixed point comes out
+        # -0.169 against a steady -0.011: a FIFTEENFOLD overshoot on
+        # step one. Measured, Pi_Q then spends the whole run climbing
+        # back out of that hole and crosses zero at tau ~ 0.55, ending
+        # POSITIVE where the drive and the closed-form fixed point are
+        # both NEGATIVE -- which is exactly the cos = -0.995 against
+        # Fluidum. Starting the moments one step later costs nothing:
+        # they are initialised to zero anyway and tau_M ~ 0.26 fm is
+        # many steps.
+        have_hist = isfinite(work.alpha_prev[i]) && isfinite(work.T_prev[i])
+        if τMq > 0.0 && have_hist
+            # a_ν^i = Dν^i, from the pre-relaxation snapshot so every
+            # cell sees the same stage (the reason `Q` exists).
+            dtnx = isfinite(work.nux_prev[i]) ? (nux - work.nux_prev[i])/Δ : 0.0
+            dtny = isfinite(work.nuy_prev[i]) ? (nuy - work.nuy_prev[i])/Δ : 0.0
+            ixm = i - g.Nytot; ixp = i + g.Nytot
+            dxnx = (phys_from_stored(Q[L.iNux,ixp]) - phys_from_stored(Q[L.iNux,ixm]))*0.5*invdx
+            dxny = (phys_from_stored(Q[L.iNuy,ixp]) - phys_from_stored(Q[L.iNuy,ixm]))*0.5*invdx
+            dynx = (phys_from_stored(Q[L.iNux,i+1]) - phys_from_stored(Q[L.iNux,i-1]))*0.5*invdy
+            dyny = (phys_from_stored(Q[L.iNuy,i+1]) - phys_from_stored(Q[L.iNuy,i-1]))*0.5*invdy
+            dtux2 = isfinite(work.ux_prev[i]) ? (ux - work.ux_prev[i])/Δ : 0.0
+            dtuy2 = isfinite(work.uy_prev[i]) ? (uy - work.uy_prev[i])/Δ : 0.0
+            aνx = uτ*dtnx + ux*dxnx + uy*dynx
+            aνy = uτ*dtny + ux*dxny + uy*dyny
+            nut2 = nu_tau_2d(ux, uy, uτ, nux, nuy)
+            # theta_nu = d_mu nu^mu. The tau-row is d_tau of
+            # nu^tau = (u.nu)/u^tau, and that is a QUOTIENT: the
+            # denominator carries u^tau(tau) too. FiVo dropped the
+            # second half of the quotient rule here until 2026-09-09 --
+            # the -nu^tau (u^x dtu^x + u^y dtu^y)/(u^tau)^2 below --
+            # which Fluidum's `thnu` has always had. It is invisible to
+            # the RHS gates, which take theta_nu as an INPUT rather than
+            # building it, and it hits the TRACE channel hardest because
+            # zeta_Q*theta_nu is that row's dominant drive: it left Pi_Q
+            # a factor ~10 low against Fluidum on the physical IC.
+            θν  = (ux*dtnx + uy*dtny + nux*dtux2 + nuy*dtuy2)*safe_inv(uτ) -
+                  nut2*(ux*dtux2 + uy*dtuy2)*safe_inv(uτ*uτ) +
+                  dxnx + dyny + nut2*safe_inv(τ)
+            # T gradients, computed here so the m2 sector does not
+            # depend on the consistent_fm block having run.
+            Tp2   = work.T_prev[i]
+            dtT2  = isfinite(Tp2) ? (T - Tp2)/Δ : 0.0
+            dxT2  = (exp(work.yT[ixp]) - exp(work.yT[ixm]))*0.5*invdx
+            dyT2  = (exp(work.yT[i+1]) - exp(work.yT[i-1]))*0.5*invdy
+            h2, hp2 = hq_h_hprime_2d(T, model.eos)
+            Ds2 = safe_div(model.kappa_coeff, T) / fmGeV
+            tm = model.terms
+            sxx, sxy, syy, sB, geo2 = consistent_m2_source_2d(
+                ux, uy, uτ, τ, T, dxT2, dyT2, dtT2,
+                nux, nuy, pQxx, pQxy, pQyy, pQeta, PiQv,
+                dta, dxa, dya, θν, aνx, aνy, dtnx, dtny,
+                dxnx, dxny, dynx, dyny,
+                θ, ax, ay, dtux2, dtuy2, dxux, dxuy, dyux, dyuy,
+                n, τn, Ds2, h2, hp2, τMq, ηM_charm_2d(T, τn), mq_transport; terms = tm)
+            # ── backward Euler on  tau_M u^tau d_tau X = -S(X) ──────────
+            # 🔴 2026-09-09. This block used to read
+            #     X_new = (A2*X_old + tau_M u^tau * s) / (A2 + 1)
+            # and that DOUBLE-COUNTS the field. `consistent_m2_source_2d`
+            # returns s = -S/(tau_M u^tau), and S is AFFINE IN X with the
+            # field appearing bare at the front of every channel:
+            #     S = (1 + geo)*X + R,   geo = tau_M*(5/3 theta + DlnC)
+            # (`sxx = pxx + ...`, `sB = PiQ + ...`). So tau_M u^tau * s
+            # = -(1+geo)*X_old - R, and the old numerator was
+            #     A2*X_old - (1+geo)*X_old - R
+            # i.e. an extra -(1+geo)*X_old against the exact implicit solve
+            #     X_new = (A2*X_old - R) / (A2 + 1 + geo).
+            # The error VANISHES as A2 -> infinity and is O(1) at
+            # production steps (A2 ~ 5 gives a factor 0.67), so it survived
+            # every RHS gate -- those evaluate the SOURCE at a state and
+            # never step it -- and it does not go away under refinement,
+            # which is exactly what the FiVo-vs-Fluidum solve comparison
+            # measured: pi_Q^xx amplitude ratio 0.57 and Pi_Q 0.076 against
+            # Fluidum, growing from cos = 1.00000 four steps out of the IC.
+            # Recover R by adding the field term back, then solve exactly.
+            # 🔴 2026-09-09 (second pass). The affine coefficient is NOT
+            # (1 + geo). Every channel is affine in its OWN field with
+            # coefficient (1 + geo) from the explicit `X + geo*X` terms
+            # PLUS a contribution from the class-(iii) coupling
+            # pi^{(i}_lambda sigma^{j)lambda}, which is also linear in pi.
+            # Measured at a representative state: the true coefficient is
+            # 1.6474 against (1 + geo) = 1.4706 -- a 12% error in the
+            # relaxation rate, which is exactly the size of the residual
+            # that survived normalising pi_Q^xx by each code's own
+            # eta_bar (0.733). Both codes' RATES agree to all digits
+            # (d(rate)/d(pxx) = -6.243942 in each), so this was purely an
+            # error in FiVo's implicit SOLVE, invisible to every RHS gate.
+            #
+            # Rather than re-derive the coefficient analytically, MEASURE
+            # it: the row is exactly affine in its own field (the system
+            # is quasi-linear), so one extra source evaluation at a
+            # perturbed field gives the slope to round-off, and the
+            # implicit step is then exact rather than approximate.
+            A2   = safe_div(τMq*uτ, Δ)
+            # ONE perturbation PER CHANNEL: perturbing all four at once
+            # would fold the cross-couplings (pi^xx feeds the trace through
+            # pi:sigma) into what is meant to be the diagonal coefficient.
+            δp = 1e-7 * max(one(pQxx), abs(pQxx), abs(pQxy),
+                            abs(pQyy), abs(PiQv))
+            m2at(a, b, c, e) = consistent_m2_source_2d(
+                ux, uy, uτ, τ, T, dxT2, dyT2, dtT2,
+                nux, nuy, a, b, c, pQeta, e,
+                dta, dxa, dya, θν, aνx, aνy, dtnx, dtny,
+                dxnx, dxny, dynx, dyny,
+                θ, ax, ay, dtux2, dtuy2, dxux, dxuy, dyux, dyuy,
+                n, τn, Ds2, h2, hp2, τMq, ηM_charm_2d(T, τn), mq_transport; terms = tm)
+            # d(rate)/d(field) = -c/(tau_M u^tau)  =>  c = -slope*tau_M*u^tau
+            cxx = -(m2at(pQxx+δp, pQxy, pQyy, PiQv)[1] - sxx)/δp * τMq*uτ
+            cxy = -(m2at(pQxx, pQxy+δp, pQyy, PiQv)[2] - sxy)/δp * τMq*uτ
+            cyy = -(m2at(pQxx, pQxy, pQyy+δp, PiQv)[3] - syy)/δp * τMq*uτ
+            cB  = -(m2at(pQxx, pQxy, pQyy, PiQv+δp)[4] - sB )/δp * τMq*uτ
+            dn(c) = max(A2 + c, 0.5*(A2 + 1))   # as the shear block guards
+            # tau_M u^i d_i X: the transverse half of tau_M u^mu d_mu X.
+            # These fields carry no flux entries, so without this the
+            # second moment was advected by NOTHING -- see the note on
+            # `relax_advect_m2` in primitives2d.jl.
+            ram  = model.relax_advect_m2
+            amxx = ram ? -τMq*upw(L.iPQxx, i, ux, uy) : 0.0
+            amxy = ram ? -τMq*upw(L.iPQxy, i, ux, uy) : 0.0
+            amyy = ram ? -τMq*upw(L.iPQyy, i, ux, uy) : 0.0
+            amB  = ram ? -τMq*upw(L.iPiQ,  i, ux, uy) : 0.0
+            Rxx  = -τMq*uτ*sxx - cxx*pQxx - amxx
+            Rxy  = -τMq*uτ*sxy - cxy*pQxy - amxy
+            Ryy  = -τMq*uτ*syy - cyy*pQyy - amyy
+            RB   = -τMq*uτ*sB  - cB *PiQv  - amB
+            pQxx = (A2*pQxx - Rxx) / dn(cxx)
+            pQxy = (A2*pQxy - Rxy) / dn(cxy)
+            pQyy = (A2*pQyy - Ryy) / dn(cyy)
+            PiQv = (A2*PiQv - RB)  / dn(cB)
+            # tracelessness: correct pQeta alone, as the medium shear does
+            pQeta, _ = project_shear_traceless_2d(ux, uy, uτ, pQxx, pQxy, pQyy, pQeta)
+            U[L.iPQxx,i]  = stored_from_phys(pQxx)
+            U[L.iPQxy,i]  = stored_from_phys(pQxy)
+            U[L.iPQyy,i]  = stored_from_phys(pQyy)
+            U[L.iPQeta,i] = stored_from_phys(pQeta)
+            U[L.iPiQ,i]   = stored_from_phys(PiQv)
+        end
+    end
+    return nothing
 end

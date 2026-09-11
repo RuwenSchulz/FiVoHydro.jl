@@ -62,7 +62,9 @@ include(joinpath(_ROOT, "src", "shear_tensor.jl"))
 include(joinpath(_ROOT, "src", "primrec.jl"))          # 1-D production recovery
 include(joinpath(_ROOT, "src2d", "shear2d.jl"))
 include(joinpath(_ROOT, "src2d", "state_layout2d.jl"))
+include(joinpath(_ROOT, "src2d", "terms2d.jl"))       # Terms2D, carried by the model
 include(joinpath(_ROOT, "src2d", "primitives2d.jl"))
+include(joinpath(_ROOT, "src2d", "bessel2d.jl"))      # fast K₂, needed by primrec2d.jl
 include(joinpath(_ROOT, "src2d", "primrec2d.jl"))      # 2-D recovery under test
 
 const LAY1 = StateLayout([:Dtau, :Sr, :E, :nur, :Pi, :piR, :piEta])

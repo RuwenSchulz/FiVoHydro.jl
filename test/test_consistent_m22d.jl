@@ -160,7 +160,29 @@ function gate_Gm1()
                                  dtα=p.dtα, drα=p.drα, dtν=p.dtν, drν=p.drν)
         # got = (dpxx, dpxy, dpyy, dPiQ) ↔ ref = (dp_l, dp_φ, dPiQ)
         uτp = sqrt(1 + p.ur^2)
-        pl_out = project_l(p.ur, 0.0, uτp, got[1], got[2], got[3])
+        # ⚠ CORRECTED 2026-09-10 — the RATE of p_l is NOT the projection of the rate.
+        # This read `project_l(p.ur, 0.0, uτp, got[1], got[2], got[3])`, i.e.
+        # l_μl_ν ∂_τπ^{μν} with l held fixed; but l = (u^r, u^τ) moves with the flow,
+        # and ∂_τ(l l π) − l l ∂_τπ is EXACTLY the projector term
+        # τ_M(u^i c^j + u^j c^i) of the covariant Δ^{ij}_{αβ}Dπ^{αβ}. The 2-D rows
+        # lacked that term and the frozen map agreed with them at 1e-15; with the
+        # moving map the old rows were off by 1.6e-4 .. 3.4e-3 at these four states.
+        # On the axis (u^y = 0) the projection collapses to p_l = π^{xx}/(u^τ)²
+        # (independent of π^{xy}), so its derivative along the trajectory is exact:
+        #     dp_l/dτ = ∂_τπ^{xx}/(u^τ)² − 2 π^{xx} u^r ∂_τu^r/(u^τ)⁴ .
+        # And the two sides must describe the SAME state. The 1-D reference is handed
+        # ∂_r p_l = 0; with π^{xx} = p_l (u^τ)² that state has
+        #     ∂_x π^{xx} = 2 π^{xx} u^r ∂_r u^r/(u^τ)²  ≠ 0 ,
+        # while the 2-D source returns the rate WITHOUT advection (the solver upwinds
+        # u^k∂_kπ separately, `relax_advect_m2`). So the 2-D rate for that state is
+        # the source plus its advection −(u^x/u^τ)∂_xπ^{xx}. Without this the frozen
+        # map and the missing projector happened to cancel; with the projector in
+        # and the map moving, it is the one term left (2(u^r)²π^{xx}∂_ru^r/(u^τ)⁵).
+        pxx0 = p.p_l * uτp^2
+        @test isapprox(project_l(p.ur, 0.0, uτp, pxx0, 0.0, p.p_φ), p.p_l; rtol = 1e-13)
+        dxpxx = 2*pxx0*p.ur*p.drur/uτp^2
+        rate_xx = got[1] - (p.ur/uτp)*dxpxx
+        pl_out = rate_xx/uτp^2 - 2*pxx0*p.ur*p.dtur/uτp^4
         for (k, (g2, r1, nm)) in enumerate(((pl_out, ref[1], "p_l"),
                                             (got[3], ref[2], "p_φ"),
                                             (got[4], ref[3], "Π_Q")))
