@@ -17,6 +17,13 @@ Base.@kwdef mutable struct DiagCounters
     v_near_cells::Int = 0
     v_max::Float64 = 0.0
 
+    # ∂_τ u^r gone grid-scale: the short-wavelength instability of the operator-split
+    # NS target (2026-09-13, see relax_dissipative!).  `q_max` is the running maximum of
+    # ‖∇²(∂_τu^r)‖/‖∂_τu^r‖ (0 = smooth, 4 = two-cell zig-zag); `steps` counts relaxation
+    # substeps past the threshold.  A producer that ends with steps > 0 has ringed.
+    dtau_ur_gridscale_steps::Int = 0
+    dtau_ur_q_max::Float64 = 0.0
+
     Pi_clipped_cells::Int = 0
     Pi_clip_maxratio::Float64 = 0.0
     Pi_clip_max_i::Int = 0

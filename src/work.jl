@@ -82,6 +82,14 @@ mutable struct Work1D
     # (`consistent_fm`, 2026-09-11): the pressure-gradient T channel and D ln h need DT.
     # NaN-seeded like alpha_prev; the ∂_τT pieces are dropped on the first step.
     T_prev::Vector{Float64}
+
+    # ∂_τ u^r, built ONCE per relaxation substep from (y, y_prev) and then shared by the
+    # charge and viscous blocks, which used to recompute it independently.  Held as its
+    # own field because it is BAND-LIMITED before use when `dtau_u_smooth_len > 0` — see
+    # the long note in `relax_dissipative!` (src/dissipation.jl) for why a raw pointwise
+    # ∂_τ u^r is short-wavelength unstable in an operator-split scheme.
+    durdtau::Vector{Float64}
+    durdtau_tmp::Vector{Float64}
 end
 
 function make_work(U)
@@ -150,6 +158,7 @@ function make_work(U)
         fill(0.0, nt),
         fill(NaN, Ntot),   # alpha_prev — NaN marks "no previous substep yet" (∂τα term skipped then)
         fill(NaN, Ntot),   # T_prev — same convention, for the consistent first moment's ∂τT
+        zeros(Ntot), zeros(Ntot),   # durdtau, durdtau_tmp — rebuilt every relaxation substep
     )
 end
 

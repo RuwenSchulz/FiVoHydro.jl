@@ -348,6 +348,7 @@ observables are stabilizer-independent. Production bulk runs enable only what th
 | `nur_clip_factor` | `-1` (off) | clip `\|ν^r\| ≤ f·n_smoothed·u^τ` after relaxation | `src/dissipation.jl` `relax_dissipative!` (end) |
 | `alpha_filter_eps`, `nur_filter_eps`, `visc_filter_eps` | `0` | Kreiss–Oliger filter strength, clamped to `[0, 0.24]` | `smooth_alpha!` etc. |
 | `alpha_smooth_len`, `nur_smooth_len`, `visc_smooth_len` | `0` | smoothing length → ε via `eps_from_len(·, dr)` | same |
+| `dtau_u_smooth_len` | `0` (off) | band-limit `∂_τu^r` at a fixed **physical** length (fm) before it feeds `θ_full`, the NS targets and the charge projector. NOT cosmetic: the split scheme loses its `k²` viscous damping at short wavelength and rings, and the ringing **grows with resolution** — onset is measured, not derived (between dr = 0.026 and 0.013 fm on the O+O bulk); see the 2026-09-13 entry in `EQUATIONS1D.md`. Off is the pre-09-13 behaviour; `diag.dtau_ur_q_max` says whether a run is in the band | `src/dissipation.jl` `bandlimit_centered!` |
 | `do_soft_project_nur` | `false` | tanh projection of ν_NS and ν_new into `\|ν^r\| < n u^τ` | `_soft_project_nur_phys` |
 | `do_axis_project_nur`, `axis_project_nfit` | `false`, `2` | polynomial axis projection of ν^r | `axis_project_nur_tapered!` |
 | `Pi_clip_factor`, `pi_clip_factor` | `-1` (off) | clip bulk/shear relative to the pressure | `relax_dissipative!` |

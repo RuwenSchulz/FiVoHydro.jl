@@ -532,6 +532,11 @@ function run_sim_ideal_diff_visc(; outdir::String,
                                 nur_filter_eps::Float64=0.0,
                                 alpha_smooth_len::Float64=0.0,
                                 nur_smooth_len::Float64=0.0,
+                                # Band limit (fm) on the ∂_τu^r that feeds θ_full and the NS
+                                # targets. 0.0 = raw pointwise difference = pre-2026-09-13
+                                # behaviour, which is short-wavelength unstable below
+                                # λ* ≈ 2π ζ v/(e+P). See relax_dissipative!.
+                                dtau_u_smooth_len::Float64=0.0,
                                 do_soft_project_nur::Bool=false,
                                 do_axis_project_nur::Bool=false,
                                 axis_project_nfit::Int=2,
@@ -628,7 +633,9 @@ function run_sim_ideal_diff_visc(; outdir::String,
         # charge-sector closure (:mis | :density_frame)
         charge_mode,
         # the consistent first moment and the term switches
-        consistent_fm, terms_resolved
+        consistent_fm, terms_resolved,
+        # ∂_τu^r band limit (fm); 0.0 = off
+        dtau_u_smooth_len
     )
 
     U = zeros(length(layout.names), grid.Nr + 2*grid.nghost)
@@ -785,7 +792,7 @@ function run_sim_ideal_diff_visc(; outdir::String,
         end
     end
 
-    @info "Done IDEAL+DIFF+VISC" τ=τ it=it outdir=outdir Q_Dtau=charge_integral_Dtau(U, grid, model) primfail_total=diag.prim_fail_cells floorE_total=diag.floor_E_cells floorD_total=diag.floor_D_cells nanfix_total=diag.nanfix_cells SrScaled_total=diag.Sr_scaled_cells mood1_total=diag.mood_stage1_bad mood2_total=diag.mood_stage2_bad dt_halvings_total=diag.stage_dt_halvings
+    @info "Done IDEAL+DIFF+VISC" τ=τ it=it outdir=outdir dtau_ur_qmax=diag.dtau_ur_q_max dtau_ur_gridscale_steps=diag.dtau_ur_gridscale_steps Q_Dtau=charge_integral_Dtau(U, grid, model) primfail_total=diag.prim_fail_cells floorE_total=diag.floor_E_cells floorD_total=diag.floor_D_cells nanfix_total=diag.nanfix_cells SrScaled_total=diag.Sr_scaled_cells mood1_total=diag.mood_stage1_bad mood2_total=diag.mood_stage2_bad dt_halvings_total=diag.stage_dt_halvings
 
     if postprocess
         # Postprocess: write Langevin-style current snapshots + splines (JLD2)
@@ -966,6 +973,7 @@ function main()
     alpha_filter_eps = haskey(ENV, "ALPHA_FILTER_EPS") ? env_float("ALPHA_FILTER_EPS", 0.0) : diag_float("ALPHA_FILTER_EPS", 0.0)
     nur_filter_eps = haskey(ENV, "NUR_FILTER_EPS") ? env_float("NUR_FILTER_EPS", 0.0) : diag_float("NUR_FILTER_EPS", 0.0)
     alpha_smooth_len = haskey(ENV, "ALPHA_SMOOTH_LEN") ? env_float("ALPHA_SMOOTH_LEN", 0.0) : diag_float("ALPHA_SMOOTH_LEN", 0.0)
+    dtau_u_smooth_len = haskey(ENV, "DTAU_U_SMOOTH_LEN") ? env_float("DTAU_U_SMOOTH_LEN", 0.0) : diag_float("DTAU_U_SMOOTH_LEN", 0.0)
     nur_smooth_len = haskey(ENV, "NUR_SMOOTH_LEN") ? env_float("NUR_SMOOTH_LEN", 0.0) : diag_float("NUR_SMOOTH_LEN", 0.0)
     do_soft_project_nur = haskey(ENV, "DO_SOFT_PROJECT_NUR") ? env_bool("DO_SOFT_PROJECT_NUR", true) : diag_bool("DO_SOFT_PROJECT_NUR", true)
     do_axis_project_nur = haskey(ENV, "DO_AXIS_PROJECT_NUR") ? env_bool("DO_AXIS_PROJECT_NUR", false) : diag_bool("DO_AXIS_PROJECT_NUR", false)
@@ -1056,6 +1064,7 @@ function main()
                             nur_filter_eps=nur_filter_eps,
                             alpha_smooth_len=alpha_smooth_len,
                             nur_smooth_len=nur_smooth_len,
+                            dtau_u_smooth_len=dtau_u_smooth_len,
                             do_soft_project_nur=do_soft_project_nur,
                             do_axis_project_nur=do_axis_project_nur,
                             axis_project_nfit=axis_project_nfit,

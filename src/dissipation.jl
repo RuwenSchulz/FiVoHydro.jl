@@ -384,6 +384,51 @@ function smooth_field_centered!(U, idx::Int, worktmp::Vector{Float64}, grid, eps
     return nothing
 end
 
+# ------------------------------------------------------------
+# Band-limit a cell-centred vector at a fixed PHYSICAL length.
+#
+# n passes of the binomial [1,2,1]/4 stencil, which is `smooth_field_centered!`
+# at eps = 1/4.  The transfer function of one pass is cos²(k dr/2), so n passes
+# give cos^{2n}(k dr/2) ≈ exp(-n k² dr²/4): a Gaussian of width σ² = n dr²/2.
+# Asking for a cutoff `len` therefore costs n = 2 (len/dr)² passes, and because n
+# scales with (len/dr)² the SAME PHYSICAL wavelengths are removed on any grid —
+# which is the whole point, see `relax_dissipative!`.  Refining dr costs more
+# passes, not a different answer.  Capped at 256 passes so a silly `len` on a fine
+# grid degrades to "very smooth" rather than to a stall.
+function bandlimit_centered!(v::Vector{Float64}, tmp::Vector{Float64}, grid, len::Float64)
+    len <= 0 && return 0
+    ng = grid.nghost
+    Ntot = length(v)
+    npass = min(ceil(Int, 2 * (len/grid.dr)^2), 256)
+    i0 = ng + 1
+    iL = Ntot - ng
+    iL - i0 < 2 && return 0
+    @inbounds for _ in 1:npass
+        copyto!(tmp, v)
+        for i in (i0+1):(iL-1)
+            v[i] = 0.25*tmp[i-1] + 0.5*tmp[i] + 0.25*tmp[i+1]
+        end
+    end
+    return npass
+end
+
+# Grid-scale content of a cell-centred vector: ‖∇²v‖₂ / ‖v‖₂ with the bare
+# [1,-2,1] stencil.  A mode e^{ikr} gives 2(1 - cos(k dr)), so this runs from 0
+# (smooth) to 4 (two-cell Nyquist zig-zag); above ~2 the field is dominated by
+# wavelengths under four cells.  Used only to decide whether to shout.
+function gridscale_ratio(v::Vector{Float64}, grid)
+    ng = grid.nghost
+    Ntot = length(v)
+    num = 0.0; den = 0.0
+    @inbounds for i in (ng+2):(Ntot-ng-1)
+        d2 = v[i-1] - 2*v[i] + v[i+1]
+        num += d2*d2
+        den += v[i]*v[i]
+    end
+    den <= 0 && return 0.0
+    return sqrt(num/den)
+end
+
 function smooth_n_for_clip!(work::Work1D, grid; eps::Float64=0.25)
     ng = grid.nghost
     Ntot = length(work.n)
@@ -489,6 +534,12 @@ end
 # arithmetic, for measuring what the fix moves. Not a physics option.
 const HYDRO_LEGACY_DTAU_UR = Ref(false)
 
+# ‖∇²(∂_τu^r)‖/‖∂_τu^r‖ above which the term is grid-scale and the run is in the unstable
+# band (the ratio saturates at 4 on a two-cell zig-zag; 2 means "under four cells").  The
+# O+O background sat at ~0.1 before 09-11 and went past 2 after it.  Warn-once latch.
+const DTAU_UR_GRIDSCALE_Q = 2.0
+const DTAU_UR_WARNED = Ref(false)
+
 function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Work1D;
                             diag::Union{Nothing,DiagCounters}=nothing)
     L = model.layout
@@ -592,6 +643,78 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
         end
     end
 
+    # ------------------------------------------------------------------------------
+    # ∂_τ u^r, built once and band-limited.
+    #
+    # 🔴 2026-09-13.  The 09-11 fix above put ∂_τ u^r back at full strength (it had been
+    # evaluated at ~4 % of its value).  That is the RIGHT derivative, and the closed-form
+    # gates agree — but at full strength it makes this operator-split scheme SHORT-
+    # WAVELENGTH UNSTABLE, and the O+O background ran straight into it.
+    #
+    # The mechanism.  ∂_τ u^r enters θ_full, hence Π_NS = −ζ θ_full and the shear target.
+    # Π feeds back into the momentum equation, so linearising a mode e^{ikr} gives
+    #
+    #     ∂_τ δu^r [ (e+P) − i k ζ v ] = −ik δP − ζ k² δu^r ,
+    #
+    # and the viscous damping −ζk² picks up the factor (e+P)²/[(e+P)² + k²ζ²v²].  Above
+    # k ≈ (e+P)/(ζ v) the k² damping is gone: short wavelengths stop being damped and the
+    # −ikδP term acquires a real, driving piece.  That is the STRUCTURE, and it is why a
+    # short-wavelength mode is the one that goes.  It is NOT a usable threshold: taken
+    # literally it puts ζ|v|/(e+P) at 0.4–0.9 fm on this background (measured), which would
+    # make every grid anyone runs unstable, and that is false.  The real onset is set by the
+    # scheme's own numerical dissipation competing with the drive, which this estimate omits.
+    # So the onset here is MEASURED, not predicted.
+    #
+    # MEASURED 2026-09-13 on the O+O bulk, τ ∈ [3.4, 4.7], sign changes of ∂_r T over
+    # r ∈ [1, 4.2] fm and max |second difference of T| (early → late):
+    #
+    #     dr = 0.0260 fm, raw       0–10 sign changes   |d²T| 4.8e-5 → 1.2e-5   DECAYING
+    #     dr = 0.0130 fm, raw       0–41 sign changes   |d²T| 6.9e-5 → 2.6e-4   GROWING
+    #     dr = 0.0130 fm, limited   0– 6 sign changes   |d²T| 1.2e-5 → 3.1e-6   DECAYING
+    #
+    # Onset is therefore between dr = 0.026 and 0.013 fm on THIS background; it is not a
+    # number this code can derive, so a producer on a new grid must measure it.  Refining
+    # the grid makes it WORSE, which is the signature: an instability of the scheme, not a
+    # discretisation error, and it does not converge away.  (The 09-08 note at the head of
+    # generate_physical_background_fivo.jl — "at nr=1000–2000 the solve CFL-CRAWLS rather
+    # than failing" — is this same thing seen from outside.)  Cutting Δ by 5× changes
+    # NOTHING (43 vs 43 sign changes, amplitudes within 10 %), so no timestep rule can
+    # catch it and none is added here.
+    #
+    # The cure is to stop the term acting below the scale where the split scheme means
+    # anything.  `dtau_u_smooth_len` band-limits ∂_τ u^r at a fixed PHYSICAL length before
+    # it is used, so the term is grid-convergent: refining dr costs more filter passes and
+    # returns the same answer.  θ_full varies on ~1 fm, so removing content under ~0.1 fm
+    # takes nothing physical with it — and the check is that the limited dr = 0.013 run
+    # agrees with the INDEPENDENT stable dr = 0.026 run to 1e-3 relative in T inside the
+    # fireball, while the raw dr = 0.013 run carries a 4 % inflated π^r_r on top of that.
+    # Default 0.0 = off = bit-identical to 09-11..09-13.
+    #
+    # `gridscale_ratio` reports whether ∂_τ u^r is grid-scale, so a configuration can no
+    # longer walk into this in silence.  It says IN THE BAND, not how bad: measured q_max
+    # 2.36 (dr=0.013, rings hard), 2.16 (dr=0.026, rings mildly), 0.014 (limited).
+    # Gates: test/run1d_gates.jl (9/9 with this change), test/test_gubser_viscous1d.jl.
+    @inbounds for i in 1:Ntot
+        yp = work.y_prev[i]
+        work.durdtau[i] = (isfinite(yp) && work.ok[i]) ?
+                          safe_div(sinh(work.y[i]) - sinh(yp), Δ) : 0.0
+    end
+    bandlimit_centered!(work.durdtau, work.durdtau_tmp, grid, model.dtau_u_smooth_len)
+    if diag !== nothing
+        q = gridscale_ratio(work.durdtau, grid)
+        diag.dtau_ur_q_max = max(diag.dtau_ur_q_max, q)
+        if q > DTAU_UR_GRIDSCALE_Q
+            diag.dtau_ur_gridscale_steps += 1
+            if !DTAU_UR_WARNED[]
+                DTAU_UR_WARNED[] = true
+                @warn """∂_τ u^r has gone grid-scale — the short-wavelength instability \
+                         described in relax_dissipative! (src/dissipation.jl).  The profile \
+                         will ring and REFINING THE GRID WILL MAKE IT WORSE.  Set \
+                         `dtau_u_smooth_len` (fm) to band-limit the term, or coarsen dr.""" τ=τ Δ=Δ q=q threshold=DTAU_UR_GRIDSCALE_Q dr=grid.dr dtau_u_smooth_len=model.dtau_u_smooth_len
+            end
+        end
+    end
+
     # ---- diffusion ----
     if model.enable_diff && L.hasNur
         @inline function _soft_project_nur_phys(ν::Float64, n::Float64, uτ::Float64)
@@ -658,8 +781,7 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
             θ  = work.theta[i]
 
             # Full expansion scalar for second-order terms (include ∂τ u^τ).
-            yp = work.y_prev[i]
-            durdτ = isfinite(yp) ? safe_div((ur - sinh(yp)), Δ) : 0.0
+            durdτ = work.durdtau[i]   # built + band-limited once, above
             duτdτ = safe_div(ur, uτ) * durdτ
             θ_full = θ + duτdτ
 
@@ -863,8 +985,7 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
             # Full expansion scalar θ = ∇_μ u^μ.
             # `compute_theta_u!` drops ∂τ u^τ during the relaxation substep, so we add
             # it back using a backward difference for full/second-order terms (and bulk).
-            yp = work.y_prev[i]
-            durdτ = isfinite(yp) ? safe_div((ur - sinh(yp)), Δ) : 0.0
+            durdτ = work.durdtau[i]   # built + band-limited once, above
             duτdτ = safe_div(ur, uτ) * durdτ
             θ_full = θ + duτdτ
 

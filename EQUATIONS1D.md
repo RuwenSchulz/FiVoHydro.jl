@@ -248,6 +248,39 @@ shipped, and Fluidum's `hqc_m2_rows(:consistent)` matches it to 1.7e-15 (gate M4
 
 Newest first. Each is also recorded at the code.
 
+**2026-09-13 — ∂_τu^r at full strength makes the split NS target short-wavelength unstable.** The
+09-11 fix above is right, and the closed-form gates agree with it — but the O+O bulk background ran
+straight into what it exposed. ∂_τu^r enters θ_full, so Π_NS = −ζθ_full and the shear target carry it;
+Π feeds back into the momentum equation, and for a mode e^{ikr} the viscous damping −ζk² picks up a
+factor (e+P)²/[(e+P)²+k²ζ²v²], i.e. above k ≈ (e+P)/(ζv) the k² damping is gone. That is the
+structure, not a threshold: taken literally ζ|v|/(e+P) is 0.4–0.9 fm here, which would condemn every
+grid in use and does not. **The onset is measured, not derived.** On the O+O bulk over τ ∈ [3.4, 4.7]
+(sign changes of ∂_r T over r ∈ [1, 4.2] fm, and max |second difference of T|, early → late):
+
+| dr (fm) | ∂_τu^r | sign changes | max \|d²T\| | |
+|---|---|---|---|---|
+| 0.0260 | raw | 0–10 | 4.8e-5 → 1.2e-5 | decaying |
+| 0.0130 | raw | 0–41 | 6.9e-5 → 2.6e-4 | **growing** |
+| 0.0130 | limited, 0.10 fm | 0–6 | 1.2e-5 → 3.1e-6 | decaying |
+
+**Refining the grid makes it worse** — an instability of the scheme, not a discretisation error, and it
+does not converge away. A 5× smaller Δτ changes nothing (43 vs 43 sign changes, amplitudes within
+10%), so no timestep rule can catch it and none was added. Two earlier observations were this same
+thing: the 09-08 note in `generate_physical_background_fivo.jl` that "at nr=1000–2000 the solve
+CFL-CRAWLS rather than failing", and the 09-11 acausal-Gubser entry below, whose runaway also grew
+with resolution. `dtau_u_smooth_len` (fm, default 0.0 = off = every result before this date, bit for
+bit) band-limits ∂_τu^r at a fixed PHYSICAL length before use, so the term is grid-convergent. The
+check that it removes the artefact and not physics: the limited dr = 0.013 run agrees with the
+INDEPENDENT stable dr = 0.026 run to 1e-3 relative in T inside the fireball and to 0.08% in max|Π|,
+while the raw dr = 0.013 run additionally carries a 4% inflated max|π^r_r|. O+O production sets
+0.10 fm (`OO_BG_DTAUUSMOOTH`). `diag.dtau_ur_q_max` reports whether ∂_τu^r is grid-scale at all —
+measured 2.36 (dr=0.013, rings hard), 2.16 (dr=0.026, rings mildly), 0.014 (limited); it says IN THE
+BAND, not how bad. run1d_gates 9/9 with the change.
+
+*Not established here:* whether the Pb+Pb bulk (`bulk_background{solver=fivo}`, Nr=800, rmax=20 ⇒
+dr = 0.025 fm) is affected. It sits just on the stable side of the O+O measurement, but that was
+measured on a different fireball and has not been checked. Any rerun reports `dtau_ur_q_max`.
+
 **2026-09-11 — ∂_τu^r was ~4% of its value in every 1-D relaxation (production path).** `y_prev` was copied at the
 start of `relax_dissipative!`, where `work.y` holds the last RK stage, not the previous step. Measured on a flowing
 fireball: |y_prev − y_new| = 3e-4 against |y_old − y_new| = 7e-3. So θ's $\partial_\tau u^\tau$, the NS targets built from

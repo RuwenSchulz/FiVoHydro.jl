@@ -188,17 +188,29 @@ struct IdealDiffViscModel{EOS,LAY,PR,SH<:ShearViscosity,BU<:BulkViscosity}
     consistent_fm::Bool
     # Per-term switches (src/terms.jl). `Terms()` = the equations as they stand.
     terms::Terms
+
+    # Band limit, in fm, for the ∂_τ u^r that feeds θ_full, the NS targets and the charge
+    # projector (2026-09-13).  0.0 = off = the raw pointwise backward difference, which is
+    # what every result before this date used and what this default reproduces bit for bit.
+    # A positive value filters ∂_τ u^r to wavelengths above `dtau_u_smooth_len` BEFORE it is
+    # used, at a fixed PHYSICAL scale rather than a fixed number of cells, so the term is
+    # grid-convergent.  See the note in `relax_dissipative!`.
+    dtau_u_smooth_len::Float64
 end
 
 
 # Backward-compatible constructors. Callers that predate the charge_mode field
 # (e.g. mainBDNK.jl, the benches, test/runtests.jl) pass eos, layout, primrec + the 36 fields
 # up to relax_advect_pi (39 positional args); callers that predate consistent_fm/terms pass 40
-# (… charge_mode). Both get the shipped defaults: charge_mode = :mis, consistent_fm = false,
-# terms = Terms(). The full 42-argument inner constructor is what main.jl uses.
+# (… charge_mode); callers that predate dtau_u_smooth_len (2026-09-13) pass 42 (… terms).
+# All get the shipped defaults: charge_mode = :mis, consistent_fm = false, terms = Terms(),
+# dtau_u_smooth_len = 0.0 (the raw ∂_τu^r, i.e. every result up to 2026-09-13).
+# The full 43-argument inner constructor is what main.jl and build_model_1d use.
 IdealDiffViscModel(eos, layout, primrec, rest::Vararg{Any,36}) =
-    IdealDiffViscModel(eos, layout, primrec, rest..., :mis, false, Terms())
+    IdealDiffViscModel(eos, layout, primrec, rest..., :mis, false, Terms(), 0.0)
 IdealDiffViscModel(eos, layout, primrec, rest::Vararg{Any,37}) =
-    IdealDiffViscModel(eos, layout, primrec, rest..., false, Terms())
+    IdealDiffViscModel(eos, layout, primrec, rest..., false, Terms(), 0.0)
+IdealDiffViscModel(eos, layout, primrec, rest::Vararg{Any,39}) =
+    IdealDiffViscModel(eos, layout, primrec, rest..., 0.0)
 
 @inline layout(model::IdealDiffViscModel) = model.layout

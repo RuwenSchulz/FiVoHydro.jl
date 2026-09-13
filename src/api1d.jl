@@ -95,6 +95,7 @@ function build_model_1d(; eos = LatticeHRGEOS(),
         nur_clip_factor::Float64 = -1.0, Pi_clip_factor::Float64 = -1.0, pi_clip_factor::Float64 = -1.0,
         alpha_filter_eps::Float64 = 0.0, nur_filter_eps::Float64 = 0.0, visc_filter_eps::Float64 = 0.0,
         alpha_smooth_len::Float64 = 0.0, nur_smooth_len::Float64 = 0.0, visc_smooth_len::Float64 = 0.0,
+        dtau_u_smooth_len::Float64 = 0.0,
         do_soft_project_nur::Bool = false, do_axis_project_nur::Bool = false, axis_project_nfit::Int = 2)
 
     consistent_m2 && error("build_model_1d: `consistent_m2` — the charm second moment is not " *
@@ -139,7 +140,7 @@ function build_model_1d(; eos = LatticeHRGEOS(),
         taupi_pi_factor, lambda_Pi_pi_factor, lambda_pi_Pi_factor, lambda_NN_factor,
         visc_filter_eps, visc_smooth_len, Pi_clip_factor, pi_clip_factor,
         advect_Pi, advect_pi, relax_advect_Pi, relax_advect_pi,
-        charge_mode, consistent_fm, t)
+        charge_mode, consistent_fm, t, dtau_u_smooth_len)
 end
 
 """
@@ -381,6 +382,7 @@ function show_equations(io::IO, m::IdealDiffViscModel)
     m.Pi_clip_factor >= 0 && push!(regs, "Pi_clip_factor=$(m.Pi_clip_factor)")
     (m.alpha_filter_eps + m.nur_filter_eps + m.visc_filter_eps + m.alpha_smooth_len +
      m.nur_smooth_len + m.visc_smooth_len) > 0 && push!(regs, "filters")
+    m.dtau_u_smooth_len > 0 && push!(regs, "dtau_u<$(m.dtau_u_smooth_len)fm")
     m.do_soft_project_nur && push!(regs, "do_soft_project_nur")
     m.do_axis_project_nur && push!(regs, "do_axis_project_nur")
     println(io, "  regulators   ", isempty(regs) ? "none (the bare scheme)" : join(regs, ", "))
