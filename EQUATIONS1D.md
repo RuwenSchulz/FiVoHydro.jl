@@ -265,10 +265,38 @@ grid in use and does not. **The onset is measured, not derived.** On the O+O bul
 
 **Refining the grid makes it worse** — an instability of the scheme, not a discretisation error, and it
 does not converge away. A 5× smaller Δτ changes nothing (43 vs 43 sign changes, amplitudes within
-10%), so no timestep rule can catch it and none was added. Two earlier observations were this same
-thing: the 09-08 note in `generate_physical_background_fivo.jl` that "at nr=1000–2000 the solve
-CFL-CRAWLS rather than failing", and the 09-11 acausal-Gubser entry below, whose runaway also grew
-with resolution. `dtau_u_smooth_len` (fm, default 0.0 = off = every result before this date, bit for
+10%), so no timestep rule can catch it and none was added. Measured here too: at Nr = 1000
+(dr = 0.0065 fm) the solve CRAWLS — τ = 0.61 in 22 min against τ = 6.0 in 50 min at Nr = 500. The
+09-11 acausal-Gubser entry below is the same phenomenon: its runaway also grew with resolution.
+
+> ⚠ **Corrected 2026-09-14.** The first version of this entry also cited the 09-08 note "at
+> nr=1000–2000 the solve CFL-CRAWLS rather than failing" as a second sighting **in FiVo**. That was
+> wrong twice over: the line is about **Fluidum's** MIS solve, and about the longer **Pb+Pb** `t1`,
+> not O+O — see `Projects/AttractorPaper1/Code/momentum_thermalization/fluidum_oo/README.md`, which
+> records the O+O grid scan explicitly. The FiVo Nr = 1000 crawl above was measured directly and
+> stands on its own.
+
+**The cross-code referee says the corrections went the right way.** `diag_bulk_backend_comparison.jl` puts
+both codes' splines on one 261×225 lattice and measures inside Σ_fo (32 522 cells). Measured 2026-09-08
+against the PRE-fix FiVo, and again 2026-09-14 against the fixed one: **T max 1.04 % → 0.29 %, T p95
+0.83 % → 0.14 %, |Δu^r| max 0.0519 → 0.0092** — 3.6–5.9× better agreement between two independent codes,
+with central T matching to four digits at τ₀.
+
+**Fluidum does not have this, and the reason is structural.** It writes the system quasilinearly,
+`A_t ∂_τφ + A_x ∂_xφ + src = 0` for `φ = (T, u^r, π^φ_φ, π^η_η, Π)`, and puts the coefficient of
+`∂_τu^r` **inside `A_t`**: in `one_d_viscous_matrix_derived` (`Fluidum.jl/src/Matrix/viscous_generated.jl`)
+entry (5,2) — the Π row against the `∂_τu^r` column — is `ζ u^r/u^τ = ζv`, precisely the quantity
+`relax_dissipative!` reaches back a step for. Entry (5,5) is `τ_B u^τ` and the two shear rows carry
+`−2u^r η/(3R²u^τ)`. Solving for all five `∂_τφ` together makes the term implicit. **Measured:**
+Fluidum's O+O bulk is grid-converged at 600/900/1200/1500 points over `rmax = 6.5` — dr down to
+**0.0043 fm, 3× finer than where FiVo rings** — all reaching τ = 6 with `T(r)` and `ν^r(r)`
+overlaying, and its stored O+O bulk passes the ringing gate (worst 2 sign changes, |d²T| decaying
+9.1e-6 → 7.6e-7 over 105 stored times). **That, not the band limit, is the real fix for FiVo**; the
+filter is a stopgap that is measured to work. Neither code dominates: in the **charm current**
+Fluidum's explicit Tsit5 on the coupled IS matrix overshoots by 3.6× at τ₀ and ~70× by τ = 4, where
+FiVo's operator-split exact exponential relaxation is unconditionally stable. Each is stiff where
+the other is not. ⚠ The 2+1D cross-code gate (15/15) compares terms at a point and would not have
+caught this: it is blind to long-time stability on a fine grid. `dtau_u_smooth_len` (fm, default 0.0 = off = every result before this date, bit for
 bit) band-limits ∂_τu^r at a fixed PHYSICAL length before use, so the term is grid-convergent. The
 check that it removes the artefact and not physics: the limited dr = 0.013 run agrees with the
 INDEPENDENT stable dr = 0.026 run to 1e-3 relative in T inside the fireball and to 0.08% in max|Π|,

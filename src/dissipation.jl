@@ -675,9 +675,12 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
     # Onset is therefore between dr = 0.026 and 0.013 fm on THIS background; it is not a
     # number this code can derive, so a producer on a new grid must measure it.  Refining
     # the grid makes it WORSE, which is the signature: an instability of the scheme, not a
-    # discretisation error, and it does not converge away.  (The 09-08 note at the head of
-    # generate_physical_background_fivo.jl — "at nr=1000–2000 the solve CFL-CRAWLS rather
-    # than failing" — is this same thing seen from outside.)  Cutting Δ by 5× changes
+    # discretisation error, and it does not converge away.  MEASURED here too: at Nr = 1000
+    # (dr = 0.0065 fm) the solve CRAWLS — τ = 0.61 in 22 min, against τ = 6.0 in 50 min at
+    # Nr = 500.  ⚠ 2026-09-14: an earlier draft of this note cited the 09-08 "at nr=1000–2000
+    # the solve CFL-CRAWLS" line as a second sighting.  IT IS NOT OURS — that line is about
+    # FLUIDUM's MIS solve, and about the longer Pb+Pb t1 rather than O+O
+    # (Projects/AttractorPaper1/Code/momentum_thermalization/fluidum_oo/README.md).  Cutting Δ by 5× changes
     # NOTHING (43 vs 43 sign changes, amplitudes within 10 %), so no timestep rule can
     # catch it and none is added here.
     #
@@ -689,6 +692,20 @@ function relax_dissipative!(U, grid, τ, Δ, model::IdealDiffViscModel, work::Wo
     # agrees with the INDEPENDENT stable dr = 0.026 run to 1e-3 relative in T inside the
     # fireball, while the raw dr = 0.013 run carries a 4 % inflated π^r_r on top of that.
     # Default 0.0 = off = bit-identical to 09-11..09-13.
+    #
+    # FLUIDUM DOES NOT HAVE THIS, and the reason is structural, not luck: it writes the system
+    # quasilinearly, A_t ∂_τφ + A_x ∂_xφ + src = 0 for φ = (T, u^r, π^φ_φ, π^η_η, Π), and puts the
+    # coefficient of ∂_τu^r INSIDE A_t — in `one_d_viscous_matrix_derived`
+    # (Fluidum.jl/src/Matrix/viscous_generated.jl) entry (5,2), the Π row against the ∂_τu^r column,
+    # is ζ u^r/u^τ = ζv, exactly the quantity this routine reaches back a step for; (5,5) is τ_B u^τ
+    # and the two shear rows carry −2u^r η/(3R²u^τ).  Solving for all five ∂_τφ together makes the
+    # term implicit.  Measured: Fluidum's O+O bulk is grid-converged at 600/900/1200/1500 points
+    # over rmax = 6.5 (dr down to 0.0043 fm, 3× finer than where this code rings) — all reach τ = 6
+    # and T(r), ν^r(r) overlay.  **That, not this filter, is the real fix here**; the band limit is a
+    # stopgap that is measured to work.  (Fluidum is not uniformly better: in the CHARM CURRENT its
+    # explicit Tsit5 on the coupled IS matrix overshoots by 3.6× at τ₀ and ~70× by τ=4, where FiVo's
+    # operator-split exact exponential relaxation is unconditionally stable.  Each code is stiff
+    # where the other is not.)
     #
     # `gridscale_ratio` reports whether ∂_τ u^r is grid-scale, so a configuration can no
     # longer walk into this in silence.  It says IN THE BAND, not how bad: measured q_max
