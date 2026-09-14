@@ -1,8 +1,8 @@
 #!/usr/bin/env julia
 # ==============================================================================
-# bench1d.jl — what the 1+1D solvers cost, per sector. The 1-D twin of bench2d.jl.
+# bench/bench1d.jl — what the 1+1D solvers cost, per sector. The 1-D twin of bench2d.jl.
 #
-#   julia -t 8 --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/bench1d.jl
+#   julia -t 8 --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/bench/bench1d.jl
 #
 # Reports ns per cell-step (wall time / (cells × steps)), best of three after a
 # warm-up run (the first run carries the compilation), for:
@@ -13,7 +13,7 @@
 # ==============================================================================
 using Printf
 
-const _ROOT = @__DIR__
+const _ROOT = normpath(joinpath(@__DIR__, ".."))
 include(joinpath(_ROOT, "main.jl"));     using .hydro;             const H = hydro
 include(joinpath(_ROOT, "main2IS2.jl")); using .hydro_current_IS2; const HI = hydro_current_IS2
 

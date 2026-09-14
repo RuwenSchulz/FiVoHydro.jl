@@ -59,7 +59,7 @@ include(joinpath(_SRC2D, "floors2d.jl"))
 include(joinpath(_SRC2D, "timestepper2d.jl"))
 include(joinpath(_SRC, "fields_io.jl"))            # save_fields / load_fields (shared)
 
-export make_grid2d, make_layout2d, build_model_2d, allocate_state,
+export make_grid2d, make_grid_2d, make_layout2d, build_model_2d, allocate_state,
        initialize_uniform!, run_sim_2d!, LatticeHRGEOS, ConformalHQEOS,
        Terms, Terms2D, without, show_terms, show_equations, fields_2d,
        save_fields, load_fields

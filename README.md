@@ -18,7 +18,7 @@ dissipative fields, MOOD fallback. The IS2 solver is a quasi-linear 5×5 system 
 | **this file** | the front door: which solver, quickstart, the term switches, input/output, validation, cost, limitations |
 | [`EQUATIONS1D.md`](EQUATIONS1D.md) | every 1+1D equation, term by term — formula, code, switch, gate — and the corrections log |
 | [`README2D.md`](README2D.md), [`EQUATIONS2D.md`](EQUATIONS2D.md) | the same for 2+1D |
-| [`examples1d/`](examples1d), [`examples2d/`](examples2d/README.md) | runnable examples, seconds to minutes each, with figures |
+| [`examples1d/`](examples1d/README.md), [`examples2d/`](examples2d/README.md) | runnable examples, seconds to minutes each, with figures. ⚠ they need `Plots`, which is **not** a dependency of this package |
 | [`TWOD_PROGRAM.md`](TWOD_PROGRAM.md) | the 2-D build log (chronological, retractions included) |
 
 This package is a git submodule of `phd-git`. Scripts `include` a driver and run with
@@ -145,16 +145,17 @@ numbers are in `examples2d/06_charm_terms.jl`.
 
 | input | how |
 |---|---|
+| grid | `make_grid_1d(Nr; rmax, nghost)`, `make_grid2d(Nx, Ny; xmax, ymax, nghost)` (also spelled `make_grid_2d`, so the 1-D/2-D names match) |
 | model | `build_model_1d(; …)`, `build_model_2d(; …)` — keywords, the same names and defaults in both; IS2 takes keywords per solve |
 | initial state | `initialize_uniform!`, `initialize_from_radial!(…, T(r), α(r); urof)`, or `set_cell!` + `finalize_ic!` per cell (1-D and 2-D); 2-D also `initialize_from_grid_csv!`; production CSVs through `run_sim_ideal_diff_visc(; init_csv)` |
 | IS2 background | `background_file` (a JLD2 bundle with `r_grid`, `t_grid`, `T_spline`, `ur_spline`, optional α/n/ν/κ/τ_diff/gradient splines) **or** `background = analytic_background(T = (τ, r) -> …, ur = …)` — any functions of (τ, r) |
 
 | output | what |
 |---|---|
-| `fields_1d(g, U, m; τ, work)` | NamedTuple of vectors over the interior: `r, T, mu, alpha, n, e, P, ur, utau, v, nur, Pi, piR, piPhi, piEta, ok` — physical units (GeV, fm) |
-| `fields_2d(g, U, work, m)` | NamedTuple of Nx×Ny matrices: `x, y, T, mu, alpha, n, e, P, ux, uy` + every dissipative field of the layout |
+| `fields_1d(g, U, m; τ, work)` | NamedTuple of vectors over the interior: `r, T, mu, alpha, n, e, P, ur, utau, v, nur, Pi, piR, piPhi, piEta, ok, τ` — physical units (GeV, fm) |
+| `fields_2d(g, U, work, m)` | NamedTuple of Nx×Ny matrices: `x, y, T, mu, alpha, n, e, P, ux, uy` + every dissipative field of the layout. ⚠ the signature is not the 1-D one: `work` is POSITIONAL and there is no `τ` (the primitives come from `work`, which already knows it) |
 | `run_static_IS2_test` | Dict: `r_grid, t_grid, n, nur, alpha, piQr, piQperp, PiQ` (Nr × Nt), `diagnostics` (per solve), `terms`, `consistent_fm`, `consistent_m2` |
-| `save_fields(path, f; model, meta)` / `load_fields(path)` | one JLD2 file with the fields **and** what produced them: the resolved term switches, the `show_equations` printout, every model knob, the git revision (`-dirty` if uncommitted), a time stamp. Plain types only, so it reads without FiVo loaded. Schema: `src/fields_io.jl` |
+| `save_fields(path, f; model, meta)` / `load_fields(path)` | **all three solvers** — one JLD2 file with the fields **and** what produced them: the resolved term switches, the `show_equations` printout, every model knob, the git revision (`-dirty` if uncommitted), a time stamp. Plain types only, so it reads without FiVo loaded. Schema: `src/fields_io.jl` |
 | `run_sim_ideal_diff_visc` | legacy: `snapshot_tau_*.csv` per dump (+ `_meta.csv`); with `postprocess = true` also a `hydro_currents_*.jld2` and a spline bundle ⚠ written to the shared `Julia/Plot/splines/FiVo.jld2` |
 
 ---
@@ -162,10 +163,10 @@ numbers are in `examples2d/06_charm_terms.jl`.
 ## 5. Validation
 
 ```sh
-julia --project=Julia/FiVoHydro.jl -e 'using Pkg; Pkg.test()'                             # ~2 min, IN CI: unit + the 1-D fast tier
-julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run1d_gates.jl         # 1+1D ladder, ~8 min
+julia --project=Julia/FiVoHydro.jl -e 'using Pkg; Pkg.test()'                             # ~4 min, IN CI: unit + the 1-D fast tier (T, A4, IO)
+julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run1d_gates.jl         # 1+1D ladder, ~10 min
 julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run2d_gates.jl         # 2+1D ladder, ~30 min
-FIVO1D_TIER=fast … run1d_gates.jl;  FIVO2D_TIER=fast … run2d_gates.jl                      # the CI tiers, ~20 s / ~30 s
+FIVO1D_TIER=fast … run1d_gates.jl;  FIVO2D_TIER=fast … run2d_gates.jl                      # the CI tiers, ~70 s / ~60 s
 FIVOHYDRO_LONG_TESTS=1 julia … Pkg.test()                                                  # + A1/A2, X1, the IS2 stability run
 ```
 
@@ -173,7 +174,7 @@ Every gate compares against a **referee that is not the code under test**: a clo
 integrated to 1e-10 (`test/analytic_referees.jl`), or another solver. Each runner exits 1 on any failure, and a
 listed gate whose file has gone missing counts as a failure.
 
-**1+1D** (`test/run1d_gates.jl`, built 2026-09-11):
+**1+1D** (`test/run1d_gates.jl`, built 2026-09-11; 10 gates, **10/10 on 2026-09-14**):
 
 | gate | checks against | measured |
 |---|---|---|
@@ -182,24 +183,27 @@ listed gate whose file has gone missing counts as a failure.
 | **A2** viscous Bjorken | the 0+1D DNMR ODEs, each of δ_ππ, τ_ππ, λ_πΠ, δ_ΠΠ, λ_Ππ; wrong-sign referees must miss | first order (the split); extrapolated error ≤ 3e-4 |
 | **A4** viscous Gubser | the semi-analytic ODE (as 2-D G1v) | L2(T) 2.6e-4, L2(π̄) 1.5 % at Nr = 800, order 1.8 / 1.1 |
 | **X1** diffusion mode | $\delta n = AJ_0(kr)$, $\nu^r = BJ_1(kr)$ closed ODE, **1D bulk, IS2 and 2D** on one referee, four term configurations | A to ≤ 3e-3 (1D, IS2), B to ≤ 1 %; 2D converges with dx |
+| **IO** the output format | `save_fields` → `load_fields` for all three solvers: fields bit for bit, the terms and knobs that made them, and the "plain types" promise re-checked in a process that loads only JLD2 | 21/21, 12 s |
 | IS2 drive, IS2 speeds, density frame, BDNK, M1 | as before (also in `Pkg.test()`) | — |
 
-**2+1D:** 22 gates (21 + Gd, the medium DNMR couplings; Gt now includes Gt7/Gt8), listed in `README2D.md` §5. Cross-code gates against Fluidum live in
+**2+1D:** 22 gates (21 + Gd, the medium DNMR couplings; Gt now includes Gt7/Gt8), **22/22 on 2026-09-14**, listed in `README2D.md` §5. Cross-code gates against Fluidum live in
 `Julia/Projects/FiVoFluidumComparison/` (three of them in `programme.jl check`).
 
 `Julia/Projects/FiVoBenchmark/` (`run_all_benchmarks.jl`, about 5 min, writes `BENCHMARK_REPORT.md`) is the older
 benchmark suite. It runs the scheme through its own harness (`bench_common.jl`) and is wired into no gate. Two of
 its checks were repaired on 2026-09-11. The viscous Bjorken check had passed at 5% while the heating was 4× too
 small, and is now a gate on the heating itself. The viscous Gubser run used an acausal C_s = 1, which the ∂_τu^r
-fix exposed (§8), and now uses 0.2. Current report: 48 PASS / 1 CHECK (a documented historical note) / 0 FAIL.
-The ladders above are the validation of record.
+fix exposed (§8), and now uses 0.2. Re-run at HEAD on 2026-09-14: **48 PASS / 1 CHECK** (a documented historical note) **/ 0 FAIL**, with every
+PASS line and every allocation figure identical to the 2026-09-11 report — only the wall times moved (a busier
+machine). The ladders above are the validation of record.
 
 ---
 
 ## 6. Cost
 
-`bench1d.jl` (1+1D) and `bench2d.jl` (2+1D, `README2D.md` §6) report ns per cell-step, best of three after a
-warm-up. Measured 2026-09-11, 8 threads, on the production-like Pb+Pb profile, τ 0.4 → 2 fm:
+`bench/bench1d.jl` (1+1D) and `bench/bench2d.jl` (2+1D, `README2D.md` §6) report ns per cell-step, best of three
+after a warm-up. They live in `bench/` so that `run_suite.jl` discovers them by prefix — until 2026-09-14 they sat
+at the package root, where the suite could not see them and nothing ran them. Measured 2026-09-11, 8 threads, on the production-like Pb+Pb profile, τ 0.4 → 2 fm:
 
 | 1+1D bulk | Nr = 400 | Nr = 800 |
 |---|---|---|
@@ -214,6 +218,11 @@ warm-up. Measured 2026-09-11, 8 threads, on the production-like Pb+Pb profile, �
 | shipped closure | 48 µs, 18 MB allocated per step | 50 µs, 36 MB per step |
 | `consistent_fm` | +25 % | +21 % |
 | `consistent_fm + consistent_m2` | +40 % | +33 % |
+
+**Re-measured 2026-09-14 at 4 threads** (what `run_suite.jl bench` records, 223 s): the per-cell-step costs roughly
+double against the 8-thread table above — ideal 6.6 µs at Nr = 400 and 6.4 µs at Nr = 800, all sectors + diffusion
+10.7 / 8.3 µs, charm IS2 76 µs at Nr = 300 — while the **allocation is thread-independent and reproduces exactly**
+(17.9 MB/step at Nr = 300, 35.9 at Nr = 600). Quote the thread count with any of these numbers.
 
 A whole 1+1D bulk solve is seconds; the Pb+Pb production background (Nr = 800 to τ = 6 fm, 4 threads) took
 184 s. **The IS2 solver is ~15× the bulk solver per cell** and allocates ~60 kB per cell per step: every cell
@@ -230,6 +239,7 @@ step and the Rusanov dissipation read the speed), so it was left for a deliberat
 | | |
 |---|---|
 | **1-D bulk products before 2026-09-11 used a ∂_τu^r ~4 % of its value** | every viscous 1-D FiVo background (Pb+Pb, O+O) was made with it. On the Pb+Pb production IC the fix moves u^r by +1–1.6 % in the bulk, Π by 5–9 %, π^η_η by 1–17 % (τ = 4 fm, T > T_fo). `hydro.HYDRO_LEGACY_DTAU_UR[] = true` reproduces the old arithmetic. Nothing has been re-minted |
+| **on a fine radial grid the corrected ∂_τu^r rings** | at full strength it makes the operator-split NS target short-wavelength unstable, and **refining `dr` makes it worse** while a 5× smaller Δτ changes nothing — it is a scheme instability, not a discretisation error. Measured on the O+O bulk: stable at dr = 0.026 fm, ringing at dr = 0.013 fm (|d²T| growing 6.9e-5 → 2.6e-4 over τ ∈ [3.4, 4.7]). **The onset is measured, not derived** — a new grid must measure its own; `diag.dtau_ur_q_max` says whether ∂_τu^r is grid-scale at all. Cure: `dtau_u_smooth_len` (fm, default 0 = off = bit-identical to every result before 2026-09-13) band-limits it at a fixed **physical** length. O+O production uses 0.10 fm (`OO_BG_DTAUUSMOOTH`); the Pb+Pb bulk (dr = 0.025 fm) sits just on the stable side and **has not been checked**. Fluidum does not have this — it keeps the ∂_τu^r coefficient inside `A_t` and is grid-converged to dr = 0.0043 fm (`EQUATIONS1D.md` §8) |
 | first order in time once anything dissipative is on | the operator split (1-D and 2-D); halve `CFLτ` to check. The IS2 solver is unsplit RK4 |
 | the 1-D cold-start recovery with `ConformalHQEOS` fails at α ≲ −20 | its initial guess $T_0 = E^{1/4}$ ignores $a_{SB}\hbar c^{-3}$, and the φ direction is too badly scaled when $n \sim e^{-24}$. `LatticeHRGEOS` converges at every α tried; production is unaffected. Use a charge-free EOS (`ConformalHQEOS(m_hq = 0, g_hq = 0)`) for charge-free tests |
 | **the shear sector is acausal for C_s = `tauShear_coeff` > 1/2** | conformal IS needs η/(τ_π(e+P)) = C_s ≤ 1/2, and an acausal IS theory is unstable in a moving frame. With the ∂_τu^r fix the 1-D solver shows it: viscous Gubser runs at C_s ≤ 0.6 and runs away at 0.8 (growing with resolution). The builders warn. ⚠ `run_sim_ideal_diff_visc` still defaults to C_s = 1 (production passes 0.2) |
@@ -240,7 +250,7 @@ step and the Rusanov dissipation read the speed), so it was left for a deliberat
 
 ---
 
-## 8. Corrections of 2026-09-11
+## 8. Corrections of 2026-09-11 and 2026-09-13
 
 Found while building the 1+1D ladder. Each one is at its code and in `EQUATIONS1D.md` §8:
 - **∂_τu^r in the 1-D relaxation (production path).** It came out at ~4% of its value. Against viscous Gubser
@@ -253,6 +263,29 @@ Found while building the 1+1D ladder. Each one is at its code and in `EQUATIONS1
 - **IS2 diagnostic counters** accumulated across solves.
 - **FiVoBenchmark's viscous Gubser ran an acausal shear sector** (C_s = 1). It completed only because of the
   ∂_τu^r defect. With the fix it crashes, as acausal IS must; the bench now uses C_s = 0.2.
+
+**2026-09-13.** The 09-11 ∂_τu^r fix is right and the closed-form gates agree with it, but at full strength it
+makes the split NS target short-wavelength unstable and the O+O bulk ran into it (§7). `dtau_u_smooth_len`
+band-limits the term at a fixed physical length; default 0.0 reproduces everything before that date bit for bit.
+The full measurement, the linear estimate that does **not** give a usable threshold, and why Fluidum is immune:
+`EQUATIONS1D.md` §8.
+
+**2026-09-14 — `main2D.jl` had an UNDECLARED DEPENDENCY, and no test could see it.** `main2D.jl:27` does
+`using DelimitedFiles` (for `readdlm` in `initialize_from_grid_csv!`), and `DelimitedFiles` was in neither
+`Project.toml` nor `Manifest.toml`. Interactively it resolves from the default environment, so nothing ever
+failed — but `Pkg.test()` runs in a sandbox that does not include it, so **the 2+1D solver could not be loaded
+in the package's own declared environment.** `Pkg.test()` never noticed because until today no test loaded
+`main2D.jl`; the new IO gate does, and failed on its first run under `Pkg.test()`. Now declared. ⚠ `Plots` is
+the same class of problem and is still undeclared — the examples need it and nothing in `src/`, `src2d/` or
+`test/` does, so it is called out in the example READMEs instead of added as a dependency of the solver.
+⚠ `Manifest.toml` still records `julia_version = 1.11.5` (what CI pins) while this machine runs 1.12.6, so the
+`DelimitedFiles` entry was added by hand rather than by a re-resolve; `Pkg` warns that the project hash is
+stale. `instantiate` and `test` both pass with the warning.
+
+**2026-09-14.** `bench/benchmark.jl`, `bench/gubser_validation.jl` and `bench/ic_diagnostics.jl` had been unable to
+construct a model since `do_axis_project_nur` was added: they passed 35 positional fields where the back-compatible
+constructors cover 36/37/39. The missing argument was restored in all three. They are the legacy CLI workflows at the
+end of this file; the validation of record is still the two ladders (§5).
 
 ---
 
@@ -287,13 +320,13 @@ only); the 1-D drivers read many (Environment flags, below).
 | `mainDensityFrame.jl` | — | thin driver: `charge_mode=:density_frame` (ν-less parabolic flux) then `hydro.main()` | DensityFrame project |
 | ~~`mainJonly.jl`, `mainJonly2nd.jl`~~ | — | **no longer exist** (renamed 2026-04: `main2.jl`, and `main2IS2.jl` descends from `mainJonly2nd.jl`). `MainFiVo/Code/case_specs.jl:87`, `run_full_pipeline.jl`, `plot_fivo_modes.jl` and `Julia/tools/diag_piQ_*` still point at them | dead |
 | `mainBGonly.jl` | `hydro_bgonly` | background-only copy of `main.jl` (≈900 duplicated lines) — kept: it is MainFiVo's `:background_only` pipeline mode (`Code/case_specs.jl:81`) | MainFiVo |
-| **`main2D.jl`** | **`hydro2d`** | **the 2+1D solver** (transverse Cartesian, boost-invariant Milne): bulk + charge `(T, u^x, u^y, Π, π^{xx}, π^{xy}, π^{yy}, π^{ηη}, n, ν^x, ν^y)` via `run_sim_2d!`. Includes all of `src2d/`. Charge sector carries the consistent first moment (`consistent_fm`) and a passive consistent second moment (`consistent_m2`). See `README2D.md`. | `Projects/FiVoFluidumComparison`; `tools/export_background2d.jl`; the 21-gate ladder `test/run2d_gates.jl` |
+| **`main2D.jl`** | **`hydro2d`** | **the 2+1D solver** (transverse Cartesian, boost-invariant Milne): bulk + charge `(T, u^x, u^y, Π, π^{xx}, π^{xy}, π^{yy}, π^{ηη}, n, ν^x, ν^y)` via `run_sim_2d!`. Includes all of `src2d/`. Charge sector carries the consistent first moment (`consistent_fm`) and a passive consistent second moment (`consistent_m2`). See `README2D.md`. | `Projects/FiVoFluidumComparison`; `tools/export_background2d.jl`; the 22-gate ladder `test/run2d_gates.jl` |
 | `src/FiVoHydro.jl` | `FiVoHydro` | package wrapper: includes `main.jl`, exports `hydro` (only `Projects/SoftPionPaper` uses `import FiVoHydro`) | — |
 
 Shared by the drivers (2026-09-11): `src/terms.jl` (the term register, §3), `src/api1d.jl` (the 1+1D
 library interface, included by `main.jl`), `src/fields_io.jl` (`save_fields` / `load_fields`, §4).
 
-`src/` (28 files, incl. the `FiVoHydro.jl` package shim) is the bulk solver: `eos.jl` (ConformalHQEOS, LatticeHRGEOS, TabulatedHQEOS),
+`src/` (32 files, incl. the `FiVoHydro.jl` package shim) is the bulk solver: `eos.jl` (ConformalHQEOS, LatticeHRGEOS, TabulatedHQEOS),
 `primitives.jl` (`IdealDiffViscModel`, viscosity models), `primrec.jl` (3-unknown Newton recovery),
 `fluxes.jl`/`reconstruction.jl`/`rhs.jl`/`timestepper.jl` (the FV scheme), `dissipation.jl` (transport
 coefficients, `relax_dissipative!`, all stabilizers), `mood.jl`, `floors.jl`, `io.jl`, `gubser.jl`
@@ -405,12 +438,13 @@ there and fails on a viscous background.
 
 **It is production for O+O.** ⚠ Two things about this are easy to get wrong:
 
-1. **The live switch is not the module's own ENV var.** `main2IS2.jl:345` defines
-   `IS2_CONSISTENT_FM = Ref(get(ENV, "FIVO_HQ_CONSISTENT", "0") == "1")`, but **nothing in the repo
-   ever sets `FIVO_HQ_CONSISTENT`** — grepping for it finds only its own definition. The switch that
-   is actually used is `FIVO_IS2_CONSISTENT`, read by
-   `Projects/LangevinPaperOO/is2_dropin.jl:139`, which assigns the `Ref` directly. Two names for one
-   flag; only the project-side one is live.
+1. **The switch has two names, and only one of them was ever set.** `main2IS2.jl` used to read
+   `FIVO_HQ_CONSISTENT` alone, and **nothing in the repo ever set it** — grepping the module's own
+   variable name concluded "never enabled anywhere", which is wrong: the live switch is
+   `FIVO_IS2_CONSISTENT`, read by `Projects/LangevinPaperOO/is2_dropin.jl:139`, which assigns the
+   `Ref` directly. Since 2026-09-08 `main2IS2.jl:358` accepts **both**, `FIVO_IS2_CONSISTENT` first,
+   so reading the module no longer suggests a dead switch. The second moment is independent:
+   `FIVO_IS2_CONSISTENT_M2`.
 2. **Pb+Pb and O+O reach "consistent" through different codes.** `LP1_CLOSURE=consistent` (the LP1
    default) resolves `charm_hydro_consistent`, which runs **Fluidum's**
    `:HQ_const_BG_consistent_5f` matrix — not this package. `OO_CLOSURE=consistent` (the O+O default)
@@ -448,7 +482,7 @@ region). Runner for the Pb+Pb-side comparison: `Tex/MaxEntHydro/run_fivo_consist
 
 ## Environment flags
 
-All ENV reads are enumerated by `tools/list_env_flags.jl` into `ENV_FLAGS.md` (151 distinct flags,
+All ENV reads are enumerated by `tools/list_env_flags.jl` into `ENV_FLAGS.md` (169 distinct flags,
 with default and `file:line`). Conventions: `FIVO_*` are the charm-solver constants (read once at
 module load, so set them before `include`), `HYDRO_*` are the bulk solver's runtime/debug toggles
 (single reader `src/runtime_flags.jl`, cached — mutate ENV before the first `hydro_flags()` call), and
@@ -471,8 +505,8 @@ the un-prefixed names (`DS_T`, `NUR_CLIP_FACTOR`, `ENABLE_DIFF`, …) are the CL
   production path — see §7); SSPRK3 was first order; charge-free states at rest had π zeroed every other
   step; λ_πΠ/λ_Ππ signs and the τ_ππ trace (default-off couplings); IS2 diagnostic counters were cumulative.
   `run_static_IS2_test` gained `terms`, `consistent_fm`, `consistent_m2` and `background` keywords; the
-  1-D bulk model gained `consistent_fm` and `terms` (two trailing fields; the 39/40-argument positional
-  constructors still work).
+  1-D bulk model gained `consistent_fm` and `terms`, and on 2026-09-13 `dtau_u_smooth_len` — three trailing
+  fields; the 36/37/39-argument positional constructors still work).
 - 2026-08-21: `run_sim_ideal_diff_visc` `DsT` default 5.24 → 0.24 (every production caller passes it
   explicitly; 0.24 is what `main()`, the benches and the tests use); `axis_project_nur_tapered!` default
   `nfit` 10 → 2 (the kwarg default); `mainBGonly.jl` module renamed `hydro_bgonly`; `test_m1_gates.jl`

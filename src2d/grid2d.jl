@@ -70,6 +70,16 @@ function make_grid2d(Nx::Int, Ny::Int; xmax::Float64 = 20.0, ymax::Float64 = 20.
                   Nxtot, Nytot, Nxtot*Nytot, xC, yC)
 end
 
+"""
+    make_grid_2d(Nx, Ny; kwargs...)
+
+Alias of [`make_grid2d`](@ref), spelled like the 1+1D `make_grid_1d`. The two
+solvers' library interfaces are otherwise named alike (`build_model_{1,2}d`,
+`run_sim_{1,2}d!`, `fields_{1,2}d`); this was the one name that broke the pattern,
+and `make_grid2d` is kept because ~60 call sites use it.
+"""
+const make_grid_2d = make_grid2d
+
 # ---- flat index helpers -------------------------------------------------------
 
 @inline lin(g::Grid2D, ix::Int, iy::Int) = (ix - 1)*g.Nytot + iy

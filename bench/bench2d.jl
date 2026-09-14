@@ -1,7 +1,7 @@
 # ==============================================================================
-# bench2d.jl — cost model for the 2+1D solver.
+# bench/bench2d.jl — cost model for the 2+1D solver.
 #
-#   julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/bench2d.jl
+#   julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/bench/bench2d.jl
 #
 # Reports ns per cell-update, so numbers are comparable across grid sizes, plus
 # the marginal cost of each dissipative sector and the scaling with resolution.
@@ -13,7 +13,7 @@
 using Printf
 using Statistics
 
-const _ROOT = @__DIR__
+const _ROOT = normpath(joinpath(@__DIR__, ".."))
 include(joinpath(_ROOT, "main.jl"))
 include(joinpath(_ROOT, "main2D.jl"))
 using .hydro

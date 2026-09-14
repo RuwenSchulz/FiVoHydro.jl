@@ -71,7 +71,7 @@ Applied in the same spirit as the 2026-08-22 pass: untrack, do not delete; files
 | ⛔ **KEPT TRACKED** `plots2d/flow_two_systems_scan.csv` (28 KB) | NOT a figure — the scan cache, written by `save_cache` and **read back by `load_cache`** (`flow_two_systems.jl:141-170`) | re-added with `git add -f`; `.gitignore` carries a `!` negation for it | Its own docstring: *"so a re-plot does not re-run twelve hydro simulations"*. Untracking it would make a fresh clone pay twelve 2-D solves to redraw one figure. It stores the RAW SERIES and recomputes the derived scalars on load, so a cache written under a wrong read-out cannot survive the fix — which is what makes it safe to track. |
 
 `data/initial_profiles_physical.csv` (52 KB) stays tracked and should: it is a real input, read by
-`main.jl`, `main2.jl`, `main2D.jl`, `bench2d.jl`, `freezeout2d.jl`, `bench/ic_diagnostics.jl` and two
+`main.jl`, `main2.jl`, `main2D.jl`, `bench/bench2d.jl`, `freezeout2d.jl`, `bench/ic_diagnostics.jl` and two
 2-D gates. `data/background2d.jld2` (48 MB) is already untracked by the blanket `*.jld2` rule.
 
 ### Not done, and why

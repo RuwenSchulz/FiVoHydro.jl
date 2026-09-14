@@ -335,7 +335,7 @@ function build_ic_state(; Nr::Int, rmax::Float64, nghost::Int, τ0::Float64,
         enable_diff, :alpha, 0.1, 1.0, 0.0,
         0.02, 0.3, 0.3, -1.0,
         0.0, 0.0, 0.0, 0.0,
-        true, 16, false, true,
+        true, false, 16, false, true,   # do_soft_project_nur, do_axis_project_nur, axis_project_nfit, advect_nur, relax_advect_nur
         # viscosity
         enable_shear, enable_bulk, shear_model, bulk_model,
         0.0, 0.0,

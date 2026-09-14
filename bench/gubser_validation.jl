@@ -80,7 +80,7 @@ function run()
         # diffusion
         false, :alpha, 0.0, 0.0, 0.0, 0.02, 0.3, 0.3, -1.0,
         0.0, 0.0, 0.0, 0.0,
-        true, 16, false, true,
+        true, false, 16, false, true,   # do_soft_project_nur, do_axis_project_nur, axis_project_nfit, advect_nur, relax_advect_nur
         # viscosity
         false, false, hydro.ZeroViscosity(), hydro.ZeroBulkViscosity(),
         0.0, 0.0,

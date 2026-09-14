@@ -21,12 +21,14 @@ jobs:
       - name: Run tests
         run: julia --project=. -e 'using Pkg; Pkg.test()'
 
-      # The 1-D suite above does not touch src2d/ or main2D.jl at all. This is the fast tier of the
-      # 2-D ladder — shear-closure algebra, primitive recovery, and recovery against the 1-D forward
-      # map on the production locus (~10 s). It is a SMOKE TEST, not the validation ladder: no time
-      # evolution is exercised, so it cannot see the timestepper, the fluxes or the regulators.
-      # The full ladder (18 gates, tens of minutes) stays manual —
-      #   julia -t auto --project=. test/run2d_gates.jl
-      # Run it after touching src2d/ or main2D.jl. See TWOD_PROGRAM.md §6 and README.md.
+      # Pkg.test() above runs the unit tests plus the 1-D ladder's fast tier (gates T and A4, wired
+      # into test/runtests.jl); it does not touch src2d/ or main2D.jl at all. This step is the fast
+      # tier of the 2-D ladder — shear-closure algebra, primitive recovery, recovery against the 1-D
+      # forward map on the production locus, and the three charm/term gates (~30 s). It is a SMOKE
+      # TEST, not the validation ladder: it exercises no fluxes on a physical IC and no regulators.
+      # The two full ladders stay manual —
+      #   julia -t auto --project=. test/run1d_gates.jl      #  9 gates, ~8 min
+      #   julia -t auto --project=. test/run2d_gates.jl      # 22 gates, tens of minutes
+      # Run them after touching src/ or src2d/. See README.md §5, README2D.md §5, TWOD_PROGRAM.md §6.
       - name: Run 2-D gates (fast tier)
         run: FIVO2D_TIER=fast julia -t auto --project=. test/run2d_gates.jl

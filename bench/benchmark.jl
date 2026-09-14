@@ -78,7 +78,7 @@ function build_case(; Nr::Int=600, rmax::Float64=20.0, tau::Float64=0.6,
         # diffusion
         enable_diff, :alpha, 0.1, 1.0, 4/3, 0.02, 0.3, 0.3, 0.5,
         0.0, 0.0, 0.3, 0.3,
-        true, 16, false, false,
+        true, false, 16, false, false,   # do_soft_project_nur, do_axis_project_nur, axis_project_nfit, advect_nur, relax_advect_nur
         # viscosity
         enable_visc, false, hydro.QGPViscosity(0.08, 1.0), hydro.ZeroBulkViscosity(),
         0.0, 0.0,

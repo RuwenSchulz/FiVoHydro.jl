@@ -27,6 +27,7 @@ TIER in ("fast", "full") || error("FIVO1D_TIER must be \"fast\" or \"full\", got
 const GATES = [
     ("T   term switches (bulk + IS2), Euler cancellation",   "test_terms1d.jl",          true),
     ("A4  viscous Gubser vs semi-analytic ODE",              "test_gubser_viscous1d.jl", true),
+    ("IO  save_fields/load_fields round-trip (1D, 2D, IS2)", "test_fields_io.jl",       true),
     ("A1  ideal Bjorken: order, charge, EOS ODE",            "test_bjorken1d.jl",        false),
     ("X1  diffusion mode: 1D, IS2, 2D vs one referee",       "test_diffusion_mode.jl",   false),
     ("    IS2 drive relaxes onto Navier-Stokes",             "test_is2_drive.jl",        false),

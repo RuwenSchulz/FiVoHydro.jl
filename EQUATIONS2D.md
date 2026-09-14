@@ -126,7 +126,8 @@ $$
 Coefficients: $\eta = (\eta/s)\,s\,\hbar c$, $\;\tau_\pi = \eta/(C_s\,T\,s)$ (`eta_over_s`, `tauShear_coeff` $= C_s$),
 $\;\delta_{\pi\pi} = $ `deltaShear_factor` $\times\,\tau_\pi$.
 
-> ⚠ **`deltaShear_factor` defaults to 4/3 here and to 0 in the 1-D `main.jl`**, and Fluidum has no
+> ⚠ **`deltaShear_factor` defaults to 4/3 here and in `build_model_1d`, but to 0 in `main.jl`'s legacy
+> `run_sim_ideal_diff_visc`**, and Fluidum has no
 > such term at all (`TWOD_PROGRAM.md` D16). Set it explicitly when comparing codes.
 
 ---

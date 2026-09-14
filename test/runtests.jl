@@ -297,7 +297,9 @@ let JLBIN = joinpath(Sys.BINDIR, Base.julia_exename()),
                   "test_is2_causality.jl", "test_m1_gates.jl",   # M1 validation ladder (9 gates; G5 skips if the LP1 bundle is absent)
                   # the 1+1D analytic ladder's fast tier (test/run1d_gates.jl), 2026-09-11:
                   "test_terms1d.jl",            # T  — the shared term switches in the 1-D solvers (~5 s)
-                  "test_gubser_viscous1d.jl"]   # A4 — viscous Gubser vs its semi-analytic ODE (~10 s)
+                  "test_gubser_viscous1d.jl",   # A4 — viscous Gubser vs its semi-analytic ODE (~10 s)
+                  # the output format itself — it had no coverage at all until 2026-09-14:
+                  "test_fields_io.jl"]         # IO — save_fields/load_fields, all three solvers (~12 s)
     long && append!(regression, ["test_is2_stability.jl",   # heavier fresh IS2 solve
                                  "test_bjorken1d.jl",       # A1/A2 — Bjorken ideal + the full DNMR set (~3 min)
                                  "test_diffusion_mode.jl"]) # X1 — the diffusion mode, three solvers (~1.5 min)

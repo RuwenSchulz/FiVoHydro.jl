@@ -342,3 +342,65 @@ A2 checks each against the 0+1D DNMR ODEs.
 
 Earlier corrections (τ_n short by $g_{hq}$, the ∂_τα history, the α floor, the vacuum ramp) are in README.md
 "Conventions and convention-changing commits" and at the code.
+
+---
+
+## 9. Time integration and the operator split
+
+⚠ §9–§11 were added on 2026-09-14, after §8; the corrections log stays **§8** because six files across the
+repository cite it by that number.
+
+**Bulk solver** (`src/timestepper.jl`, `src/api1d.jl`):
+
+| | |
+|---|---|
+| advection | SSPRK2 (Heun) on the conserved set, with MOOD; `integrator = :ssprk3` is third order for smooth ideal flow and runs without MOOD |
+| step | $\Delta\tau = \min\big(\mathrm{CFL}\,dr/a_{\max},\ \mathrm{CFL}_\tau\,\tau\big)$, defaults 0.2 and 0.05, then capped by the parabolic limit `diff_dt_coeff` $dr^2/\kappa_{\rm eff}$ and by `shear_dt_coeff`$\,\tau_\pi$, `bulk_dt_coeff`$\,\tau_\Pi$ when those sectors are on (`compute_dt_from_work`, `main.jl`) |
+| relaxation | once per accepted step, on the updated state at $\tau + \Delta$ (`relax_dissipative!`), between two rounds of floors/admissibility — first order in $\Delta\tau$ |
+| $\partial_\tau$ history | $u^r$, $\alpha$, $T$ of the previous **step** (`work.y_prev`, `alpha_prev`, `T_prev`), NaN-seeded and dropped on step one; `reset_history = false` continues a run. ⚠ this is the history that was being read at the wrong point until 2026-09-11 (§8), and the one `dtau_u_smooth_len` band-limits since 2026-09-13 |
+| failure handling | stage → BC → $\tilde D$ positivity → floors → θ-admissibility → $S$–$E$ bound → MOOD (first order locally, up to `max_stage_retries` = 3) → halve $\Delta\tau$ (up to 24 times) |
+
+Order: 2.00 on ideal Bjorken (SSPRK2), 2.99 with SSPRK3 (gate A1); 1.8 on viscous Gubser in $T$ (A4).
+First order once any dissipative sector is on — that is the split, not the integrator, and halving
+`CFLτ` halves the error rather than quartering it.
+
+**Charm IS2 solver** (`main2IS2.jl`): a quasi-linear $5\times5$ system integrated by classical **RK4**,
+unsplit, with Kreiss–Oliger dissipation ($\sigma_{\rm KO} = 0.2$) and a step set by the characteristic
+speeds of the system (its `eigvals` per face). The relaxation is exact-exponential rather than split,
+which is why it is unconditionally stable where an explicit scheme on the same matrix is not (§8).
+
+---
+
+## 10. What is *not* carried
+
+| | why |
+|---|---|
+| any vorticity coupling — `m2_vorticity`, `shear_vorticity` | $\omega^{\mu\nu} \equiv 0$ for a radial flow. The switches exist and are inert (`show_equations` marks them `≡0`); the 2+1D solver carries both |
+| the Δ-projector on $D\pi_Q$ — `m2_projector` | the 1-D second moment lives in the parallel-transported triad $(l, \hat\phi, \hat\eta)$, orthogonal to $u$, so $-\tau_M(u^ic^j + u^jc^i)$ has no component there. Also inert, also real in 2-D |
+| medium: $\varphi_7\pi\pi$ | not implemented (no knob) — the same truncation Fluidum makes |
+| medium: $\tau_{\pi\pi}$, $\lambda_{\pi\Pi}$, $\lambda_{\Pi\pi}$, $\lambda_{NN}$ | implemented and gated (A2), but **default 0** and no production caller sets them. Only $\delta_{\pi\pi} = 4/3$ is set, by the production bulk callers |
+| thermal / hydrodynamic fluctuations | none, in any solver |
+| a transverse plane | by construction: $\varepsilon_2$, $\varepsilon_3$, $v_2$, $v_3$ and every vorticity effect need `main2D.jl` |
+| charm $c_M$ back-coupling in production | implemented in the IS2 solver (`hq_cm_force`, `use_cM`), **off** in every production recipe; the 2-D solver has no twin |
+
+---
+
+## 11. Where each piece lives
+
+| file | what |
+|---|---|
+| `main.jl` | module `hydro`, the CLI `main()`, `run_sim_ideal_diff_visc`, `compute_dt_from_work`, `initialize!` |
+| `src/api1d.jl` | the library interface: `make_grid_1d`, `build_model_1d`, `allocate_state`, `set_cell!`/`finalize_ic!`/`initialize_*`, `run_sim_1d!`, `fields_1d`, `show_equations` |
+| `src/terms.jl` | `Terms`, `TERM_REGISTER`, presets, ingredients, `without`, `show_terms` — **shared with the 2+1D solver** |
+| `src/primitives.jl` | `IdealDiffViscModel` — every knob with its default and history; the viscosity models |
+| `src/dissipation.jl` | kinematics, the NS targets, `relax_dissipative!`, `bandlimit_centered!`, every stabilizer |
+| `src/hq_consistent_firstmoment.jl`, `src/hq_consistent_m2.jl` | the full-∇P first moment and the consistent second moment (both also called by the IS2 solver) |
+| `src/primrec.jl` | the three-unknown Newton primitive recovery |
+| `src/fluxes.jl`, `reconstruction.jl`, `rhs.jl`, `timestepper.jl`, `mood.jl` | the finite-volume scheme |
+| `src/eos.jl` | `ConformalHQEOS`, `LatticeHRGEOS`, `TabulatedHQEOS` |
+| `src/gubser.jl` | the analytic Gubser solution and `initialize_gubser!` |
+| `src/fields_io.jl` | `save_fields` / `load_fields` — **shared with both other solvers** (gate IO) |
+| `src/floors.jl`, `grid.jl`, `state_layout.jl`, `work.jl`, `boundary_conditions.jl` | floors, grid, layout, work arrays, boundaries |
+| `src/runtime_flags.jl`, `diagnostics.jl`, `debugging.jl`, `io.jl` | the single `HYDRO_*` ENV reader, counters, debug dumps, snapshot I/O |
+| `main2IS2.jl` | module `hydro_current_IS2`: the whole charm IS2 solver in one file (2211 lines) — `run_static_IS2_test`, `analytic_background`, `show_equations_IS2`, the RK4 stepper and its regulators |
+| `src/is2_second_moment_builder.jl` | the IS2 matrices |

@@ -1,6 +1,6 @@
 # FiVoHydro 2+1D — worked examples
 
-Nine runnable setups for `main2D.jl` / `src2d/`, each seconds to a few minutes, each producing a figure in
+Ten runnable setups for `main2D.jl` / `src2d/`, each seconds to a few minutes, each producing a figure in
 `figures/`. They are written to be **copied and edited**, and every trap this solver has actually
 shipped is called out in a comment where it would bite.
 
@@ -14,7 +14,15 @@ julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/06_char
 julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/07_real_event.jl
 julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/08_vorticity.jl
 julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/09_gubser.jl
+julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/10_showcase.jl
 ```
+
+⚠ **`Plots` is not a dependency of this package.** These examples `using Printf, Plots`, and
+`Plots` is in neither `Project.toml` nor `Manifest.toml` — so `--project=Julia/FiVoHydro.jl`
+finds it only through the shared default environment, and a fresh clone will fail at the
+`using`. Install it into your default environment (`julia -e 'using Pkg; Pkg.add("Plots")'`)
+or add it to this package's `Project.toml` before running them. Nothing in `src/`, `src2d/` or
+`test/` needs it, which is why CI never noticed. (Recorded 2026-09-14.)
 
 | | what it shows |
 |---|---|
@@ -27,8 +35,9 @@ julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/09_gubs
 | **07** a real event | a single un-averaged MC-Glauber Pb+Pb event from file to freeze-out, raw against lightly smoothed (`smooth_fm`); what the blur costs in ε₂, ε₃ and the response, and a mask artefact that doubles ε_p if you let it |
 | **08** vorticity on vs off | `m2_vorticity` measured rather than assumed: \|ω\|/\|σ\| over the fireball, what the term moves in π_Q and Π_Q, and the proof that it moves neither the medium nor the current |
 | **09** Gubser flow | the one 2-D problem with an exact answer: solver beside the closed form, and the convergence order that turns "looks right" into a number |
+| **10** the showcase | the same solver with nothing switched off — a real Pb+Pb event, `m2_vorticity = true`, run long and fine, drawn for the eye rather than for a table. It measures nothing new; read it for how to render a run, and for why `n·τ` and `n·(r+r₀)·τ` are the panels that keep their structure |
 
-**Three of them write ANIMATIONS** into `figures/anim/` (gifs, a few MB each, **not tracked by
+**Four of them write ANIMATIONS** into `figures/anim/` (gifs, a few MB each, **not tracked by
 git** — regenerable, and this package untracked 6.9 MB of figures once already):
 
 | file | what moves |
@@ -36,6 +45,7 @@ git** — regenerable, and this package untracked 6.9 MB of figures once already
 | `ex07_temperature.gif`, `ex07_charm_density.gif` | the event cooling to freeze-out, with the T_fo contour; the charm density diluting |
 | `ex08_omega_over_sigma.gif`, `ex08_delta_piQxx.gif` | where the transverse vorticity lives, and where switching the coupling on changes π_Q |
 | `ex09_gubser.gif` | solver, exact solution and their difference, side by side in time |
+| `ex10_charm_ntau.gif`, `ex10_charm_nrtau.gif`, `ex10_omega_sigma.gif`, `ex10_charm_stress.gif` | the showcase panels on one real event to τ = 8 fm/c: `n·τ`, `n·(r+r₀)·τ`, \|ω\|/\|σ\|, and the charm stress the vorticity coupling actually moves |
 
 **High resolution.** Example 08 takes `EX08_N` (default 160): `EX08_N=480 EX08_NFRAME=60
 EX08_SIZE=900 EX08_FPS=12 julia …` renders the vorticity study at 3x (~5 min; N = 640 is 4x and
@@ -51,6 +61,10 @@ default ones. The conclusion **converges**, which is the point of running it fin
 160 → 480 moves the median 6 % and the π_Q shift 19 %; 480 → 640 moves them 1.8 % and 1.0 %. The
 `max` column is the exception and does **not** converge — it grows with resolution, because the
 sharpest filaments are exactly what refinement resolves. Read the median and the p90.
+
+**Example 10's tracked figure is the N = 400 render**, not the default one: `figures/ex10_showcase_N400.png`
+was made with `EX10_N=400` (the filename carries `N`, so renders never overwrite each other). Running it at its committed default `EX10_N=240` — which is what the suite
+does — writes `ex10_showcase_N240.png` beside it and leaves the tracked one alone.
 
 **Seeing the whole tail.** The 08 maps frame the fireball and fade past freeze-out, because that is
 where the quoted numbers live. `EX08_NOFADE=1` shows every cell holding fluid at full strength on
@@ -73,7 +87,7 @@ error across the comparison radius and draws that radius as a **ring**. Both fad
 08 deliberately does not damp the value, because the bright fringe just inside freeze-out is real
 (σ there is *above* the hot-cell median; `EX08_DIAG=1` prints the check).
 
-These are **examples, not gates**. The validation ladder is `test/run2d_gates.jl` (21 gates; the
+These are **examples, not gates**. The validation ladder is `test/run2d_gates.jl` (22 gates; the
 table and the last run are in `../README2D.md` §5), the equations are `../EQUATIONS2D.md`, and the
 physics behind each gate is `TWOD_PROGRAM.md`. Run the ladder before trusting a change; run these to
 learn the API or to start a new study. (This paragraph said "18 gates, all passing as of 2026-09-03"

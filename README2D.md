@@ -4,17 +4,18 @@ A finite-volume solver for **boost-invariant, transversely Cartesian** relativis
 hydrodynamics in Milne coordinates $(\tau, x, y, \eta_s)$. It carries the medium, the
 Israel–Stewart shear and bulk stresses, and a diffusing heavy-quark (charm) charge. Optionally it
 also carries the **thermodynamically consistent** charm first moment and a passive charm second
-moment. It is the 2-D sibling of the 1+1D radial solver in `main.jl` and shares only five
-dimension-agnostic files with it (`README.md`, "Two solvers in one package").
+moment. It is the 2-D sibling of the 1+1D radial solver in `main.jl` and shares six
+dimension-agnostic files with it, plus the common I/O layer `src/fields_io.jl`
+(`README.md`, "How the solvers share code").
 
 | document | what it is for |
 |---|---|
 | **this file** | how to use the solver: quickstart, every knob, the examples, the validation, the cost |
 | [`EQUATIONS2D.md`](EQUATIONS2D.md) | every equation, term by term — formula, code, switch, gate — and the corrections log |
-| [`examples2d/`](examples2d/README.md) | nine runnable examples, each seconds to minutes, each with a figure; three also write animations |
+| [`examples2d/`](examples2d/README.md) | ten runnable examples, each seconds to minutes, each with a figure; four also write animations |
 | [`TWOD_PROGRAM.md`](TWOD_PROGRAM.md) | the chronological build log: every derivation, measurement and retraction |
 
-**Status (2026-09-11).** The ladder is 22 gates, all passing: two analytic solutions (Bjorken,
+**Status (2026-09-14).** The ladder is 22 gates, **22/22 on 2026-09-14**: two analytic solutions (Bjorken,
 Gubser), sound propagation, reproduction of the 1-D production solver, closed-form referees for the
 charm sector, and cross-code agreement with Fluidum. Not on any manuscript's production path; used
 by `Projects/FiVoFluidumComparison` and one O+O animation. Read §7 before quoting a number from
@@ -78,7 +79,7 @@ scheme**; every sector and every regulator is opt-in. Any field below can be pas
 | `eos` | `LatticeHRGEOS()` | equation of state (`ConformalHQEOS()` for the conformal tests) |
 | `with_charge` | `true` | carry the conserved charge $\tilde D = \tau J^\tau$ at all |
 | `enable_shear`, `eta_over_s`, `tauShear_coeff` | `false`, 0.1, 0.2 | $\eta = (\eta/s)s$, $\tau_\pi = \eta/(C_s T s)$ |
-| `deltaShear_factor` | **4/3** | $\delta_{\pi\pi}/\tau_\pi$. ⚠ the 1-D solver defaults to 0 and Fluidum has no such term |
+| `deltaShear_factor` | **4/3** | $\delta_{\pi\pi}/\tau_\pi$. ⚠ `build_model_1d` agrees (4/3 since 2026-09-11), but the legacy 1-D entry `run_sim_ideal_diff_visc` still defaults to **0** — production passes 4/3 explicitly. Fluidum has no such term |
 | `enable_bulk`, `zeta_over_s`, `tauPi_coeff` | `false`, 0.1, 15.0 | peaked $\zeta/s$ at $T = 0.175$ GeV, $\tau_\Pi$ from $C_\zeta$ |
 | `enable_diff`, `kappa_coeff` | `false`, **0.0** | charge diffusion with $D_sT$ = `kappa_coeff`. ⚠ set it: 0 means no diffusion at all |
 | `consistent_fm` | `false` | the full-∇P first moment (four extra terms, EQUATIONS2D §4) |
@@ -195,9 +196,11 @@ julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/06_char
 | 07 a real event | one un-averaged MC-Glauber Pb+Pb event to freeze-out, raw vs smoothed (`smooth_fm`); **animations** | 40 s |
 | 08 vorticity on vs off | `m2_vorticity` measured on that event: \|ω\|/\|σ\|, and what it moves in π_Q; **animation**. `EX08_N=480`/`640` render it at 3×/4×, and the answer **converges** (median 3.01e-2 → 2.84e-2 → 2.79e-2) | 30 s |
 | 09 Gubser flow | the solver against an exact solution, and the convergence order; **animation** | 1.5 min |
+| 10 the showcase | one real Pb+Pb event, every sector on and `m2_vorticity = true`, run long at high resolution and rendered for a slide rather than for a table; **animation**. `EX10_N`/`EX10_TAUF`/`EX10_NFRAME` override the defaults | 72 s |
 
 Times are the suite baseline (`Julia/Projects/suite_baseline.toml`), re-recorded 2026-09-11 after the
-performance pass — the whole set now runs in under 5 minutes. The suite runs them all with
+performance pass (10 on 2026-09-14) — the ten together are 591 s, just under 10 minutes. All ten pass: **13/13
+FiVo examples on 2026-09-14**, the three 1+1D ones included. The suite runs them all with
 `julia --project=Julia Julia/Projects/run_suite.jl examples --only FiVoHydro`.
 
 ---
@@ -205,7 +208,7 @@ performance pass — the whole set now runs in under 5 minutes. The suite runs t
 ## 5. Validation
 
 ```sh
-julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run2d_gates.jl           # 22 gates, ~35 min
+julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run2d_gates.jl           # 22 gates, ~35 min (22/22 on 2026-09-14)
 FIVO2D_TIER=fast julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run2d_gates.jl   # 6 gates, ~30 s, in CI
 ```
 
@@ -227,6 +230,10 @@ missing counts as a failure. Run the full ladder after touching `src2d/` or `mai
 | G4, G7 | `test_reproduction2d.jl`, `test_dissipative_vs_1d.jl` | the 1-D production run from the production IC |
 | G5, G6, G8, G9 | `test_production_allsectors2d.jl`, `test_elliptic2d.jl`, `test_unaveraged_ic2d.jl`, `test_fluctuating_ic2d.jl` | all sectors to late times; deformed, un-averaged and single-event ICs |
 
+The 2-D leg of two more gates lives in the 1-D ladder, because each judges all three solvers with one
+referee: **X1** (`test/test_diffusion_mode.jl`, the radial diffusion mode) and **IO**
+(`test/test_fields_io.jl`, `save_fields`/`load_fields` round-trip — `fields_2d` included).
+
 Outside this package, in `Julia/Projects/FiVoFluidumComparison/`:
 
 | | |
@@ -241,7 +248,7 @@ Outside this package, in `Julia/Projects/FiVoFluidumComparison/`:
 
 ## 6. Cost
 
-`bench2d.jl` reports ns per cell-step on the production IC. Measured 2026-09-11, 16 threads,
+`bench/bench2d.jl` reports ns per cell-step on the production IC. Measured 2026-09-11, 16 threads,
 $\tau = 0.4 \to 4$, all medium sectors on:
 
 | run | N | ns / cell-step |
@@ -264,6 +271,11 @@ The benchmark does a warm-up run first (without it the first row carries the sol
 and reads 6× high) and takes the best of three for the per-sector rows (with one repetition that
 section reported diffusion as *cheaper* than ideal).
 
+**Re-measured 2026-09-14 at 4 threads** (what `run_suite.jl bench` records, 269 s): 2641 → 2010 ns/cell-step from
+N = 100 to N = 300, i.e. ~3.5× the 16-thread numbers above, and the per-sector percentages reproduce within a few
+points — shear +30.0 %, bulk +21.3 %, diffusion +18.9 %, all three +33.7 %, `consistent_fm` +55.3 %,
+`+ consistent_m2` +140.7 %. Quote the thread count with any of these numbers.
+
 Which step limit binds depends on the box and the $\tau$ range. The step count tracks $N$ when the
 transverse CFL binds (cost ~$N^3$) and stays flat when the Bjorken clock `CFLτ` does (cost ~$N^2$).
 A lumpy event that goes unphysical is *slower* (MOOD retries): wall time per step is an early
@@ -276,13 +288,14 @@ warning.
 | | |
 |---|---|
 | **2-D `consistent_fm` results before 2026-09-10 are wrong** | every consistent term had the wrong sign (EQUATIONS2D §10) |
-| the charm second moment lacked its projector term before 2026-09-10 | 0.02–0.6 % of the rate; `terms = (m2_projector = false,)` reproduces the old rows. Fluidum's twin still lacks it |
+| the charm second moment lacked its projector term before 2026-09-10 | 0.02–0.6 % of the rate; `terms = (m2_projector = false,)` reproduces the old rows. Fluidum's twin lacked it too until 2026-09-11, when both the projector (default ON) and the vorticity coupling (default OFF) were derived and added to `Fluidum.jl/src/Matrix/HQ_2p1d_BG_m2.jl`; the two codes now agree on genuinely 2-D states (`FiVoFluidumComparison/gate_2p1d_m2_newterms.jl`) |
 | the vorticity couplings are off by default | `m2_vorticity`: up to 12 % of the σ coupling in the worst cells of a lumpy event; neither code carried it before. `shear_vorticity` (the medium's, 2026-09-11): not carried by Fluidum |
 | the medium's DNMR couplings τ_ππ, λ_πΠ, δ_ΠΠ, λ_Ππ | default 0; wired since 2026-09-11 with the 1+1D solver's equations and signs (gate Gd). Only δ_ππ is set by the production callers |
 | first order in time once anything dissipative is on | the operator split; halve `CFLτ` to check |
 | the dilute edge | the vacuum ramp throttles the charge sector below $n = 2\cdot10^{-3}$ fm⁻³, which reaches above $T_{\rm fo}$; quote dissipative fields from $T > T_{\rm fo}$ only |
 | no diffusive signal speed in the CFL | `wavespeeds_2d` bounds the HLLE fan by the sound speed. COMPARISON_2P1D §28 measured `\|ν\|/n` climbing to 0.93 at the edge with `consistent_fm` on — but under the wrong sign, whose expansion term anti-damped the current. Not re-measured since the fix |
-| `deltaShear_factor` default differs between the 1-D (0) and 2-D (4/3) solvers | set it explicitly in any comparison |
+| `consistent_fm` defaults differ **between the codes** | `build_model_2d` defaults to **false**; Fluidum's 2-D second-moment driver `matrix2d_HQ_BG_m2!` defaults `consistent_fm` to **true**, and its other two 2-D charm drivers (`matrix2d_HQ_BG!`, `matrix2d_visc_HQ_BG!`) carry the shipped ∇α row with no switch at all. Set it explicitly on both sides |
+| `deltaShear_factor` differs between the two 1-D **entry points** | `build_model_1d` and `build_model_2d` both default to 4/3; the legacy `run_sim_ideal_diff_visc` defaults to 0 (production passes 4/3). Set it explicitly in any comparison |
 | `transport_mass` is only partly decoupled | $\tau_n$, $h$, $h'$ still use the EoS mass |
 | no thermal fluctuations, no $c_M$ back-coupling | not implemented |
 | the 2-D charm density is not bit-identical to `eos_Pne` | since 2026-09-11 the 2-D EOS uses a fast $K_2$ (19× faster, agreeing to 1.6e-15). Fields move ≤ 4e-14 absolute on a solve; P and e are bit-identical, and `src/eos.jl` (the 1-D production path) is untouched |
