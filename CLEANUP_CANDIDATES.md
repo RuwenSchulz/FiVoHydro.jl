@@ -1,5 +1,10 @@
 # FiVoHydro.jl — cleanup (APPLIED 2026-08-22)
 
+> ⚠ Paths beginning `Julia/Projects/…` or `Tex/…` name the **private research repository** this
+> package is developed in. They are cited for provenance — so a number can be traced to the script
+> that produced it — and are not links you can follow from a clone of this package.
+
+
 **Status: the deletions below were applied on 2026-08-22** (see "what was done" per row). The
 inventory text is kept so the reasoning and the exact commands remain on record. Sizes/dates are from
 the submodule at `bb605c2`. `git rm --cached` removes a file from the index but leaves it on disk; the

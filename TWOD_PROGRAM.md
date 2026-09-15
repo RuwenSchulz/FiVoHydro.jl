@@ -1,5 +1,10 @@
 # FiVo 2+1D — build programme
 
+> ⚠ Paths beginning `Julia/Projects/…` or `Tex/…` name the **private research repository** this
+> package is developed in. They are cited for provenance — so a number can be traced to the script
+> that produced it — and are not links you can follow from a clone of this package.
+
+
 Living doc for the 2+1D (transverse Cartesian, boost-invariant Milne) extension of the FiVo bulk
 solver, carrying **bulk + charge**: `(T, u^x, u^y, Π, π^{xx}, π^{xy}, π^{yy}, π^{ηη}, n, ν^x, ν^y)`.
 

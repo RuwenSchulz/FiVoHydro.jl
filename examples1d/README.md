@@ -1,5 +1,10 @@
 # FiVo 1+1D — examples
 
+> ⚠ Paths beginning `Julia/Projects/…` or `Tex/…` name the **private research repository** this
+> package is developed in. They are cited for provenance — so a number can be traced to the script
+> that produced it — and are not links you can follow from a clone of this package.
+
+
 Runnable, each with a figure in `figures/`. From the repository root:
 
 ```sh
