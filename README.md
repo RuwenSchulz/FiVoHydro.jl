@@ -34,7 +34,7 @@ $\pi_Q$ and *nothing else*, so the claim is the bottom-right panel, not the fire
 
 ---
 
-## Does it work? — the short version
+## Validation and error estimates
 
 Every number below is printed by a script in this repository, and none is transcribed by hand —
 re-run the command beside it and you get the number back. The two validation ladders were last run
@@ -51,7 +51,7 @@ on **2026-09-15**, the worked examples on 2026-09-14.
 Every gate compares against a **referee that is not the code under test** — a closed form, a
 semi-analytic ODE integrated to 1e-10, or a second, independently written solver.
 
-### Error estimates, measured
+### Measured errors
 
 | what | against | measured |
 |---|---|---|
