@@ -94,7 +94,22 @@ function panel_c()
     rr = range(0, 4; length = 200)
     plot!(pT, rr, [Th(gubser_rho(2.0, r))/2 for r in rr]; c = :black, label = "semi-analytic")
     plot!(pp, rr, [pb(gubser_rho(2.0, r)) for r in rr]; c = :black, label = "semi-analytic")
-    for (k, Nr) in enumerate((100, 200, 400))
+    # ⚠ THE FIRST CELL IS NOT A CONVERGENCE FAILURE, and reading it as one is the trap this panel
+    # is built to avoid. Cell 1 sits at r = dr/2, so it is a DIFFERENT PHYSICAL POINT at every
+    # resolution — it chases the axis as the grid refines, and no sequence of such points measures
+    # convergence. At a FIXED radius the scheme converges cleanly; measured here at r = 0.3 fm:
+    #     Nr = 100/200/400/800  →  T err 1.20 / 0.196 / 0.030 / 0.0053 %   (order ≈ 2.5)
+    #                              π̄ err 2.9e-5 / 4.7e-5 / 7.4e-6 / 1.7e-6
+    # and even at r = 0.15 fm, inside the visible overshoot, π̄ goes 6.9e-4 → 1.5e-4 → 1.5e-5 →
+    # 2.0e-6. What cell 1 carries is the documented O(dr) axis-cell error (README §7): T there
+    # converges at first order (7.30 → 2.43 → 0.99 → 0.42 %) and π̄ decays slowly.
+    # ⛔ It is NOT the timestep and NOT the axis BC — both were tested (2026-09-15): tripling the
+    # step count moves cell 1 by <1 % of its own error, SSPRK3 changes nothing, and disabling the
+    # r=0 shear-isotropy overwrite in apply_bc! moves it from -2.00e-3 to -1.87e-3 while making T
+    # slightly WORSE. It is the geometric ~1/r source evaluated in the first cell, and the cure is
+    # resolution, not a knob.
+    conv_r = 0.3; errT = Float64[]; errP = Float64[]; Ns = (100, 200, 400)
+    for (k, Nr) in enumerate(Ns)
         g = H.make_grid_1d(Nr; rmax = 10.0)
         m = H.build_model_1d(; eos, enable_shear = true, eta_over_s = ηs)
         U = H.allocate_state(g, m)
@@ -106,10 +121,26 @@ function panel_c()
         H.finalize_ic!(U, g, m; τ0 = 1.0)
         res = H.run_sim_1d!(U, g, m; τ0 = 1.0, τfinal = 2.0, CFL = 0.15)
         f = H.fields_1d(g, U, m; τ = res.τ, work = res.work)
+        pib = f.piEta ./ (f.e .+ f.P)
         sel = f.r .<= 4
         scatter!(pT, f.r[sel][1:max(1, Nr ÷ 50):end], f.T[sel][1:max(1, Nr ÷ 50):end]; ms = 2.5, c = k + 1, label = "FiVo Nr = $Nr")
-        plot!(pp, f.r[sel], (f.piEta ./ (f.e .+ f.P))[sel]; c = k + 1, label = "FiVo Nr = $Nr")
+        plot!(pp, f.r[sel], pib[sel]; c = k + 1, label = "FiVo Nr = $Nr")
+        j = findfirst(x -> x >= conv_r, f.r)
+        ρj = gubser_rho(res.τ, f.r[j])
+        push!(errT, abs(f.T[j]/(Th(ρj)/res.τ) - 1))
+        push!(errP, abs(pib[j] - pb(ρj)))
     end
+    # the inset says what the eye cannot read off the first cell: at a fixed radius this converges.
+    plot!(pT; legend = :topright)
+    # ⚠ the inset goes BOTTOM-LEFT: top-right is the legend, and an inset placed there overlaps it
+    # and clips its own title (measured 2026-09-15). bbox() is (x, y, w, h) from the TOP-left of the
+    # panel, so y = 0.60 puts it in the lower half.
+    plot!(pT, collect(Ns), 100 .* errT; inset = (1, bbox(0.13, 0.60, 0.33, 0.30)), subplot = 2,
+          xscale = :log10, yscale = :log10, m = :circle, ms = 3, lw = 1.6, c = :black, label = "",
+          title = "|ΔT|/T [%] at r = $(conv_r) fm, vs Nr", titlefontsize = 7, xlabel = "", ylabel = "",
+          guidefontsize = 6, tickfontsize = 6, framestyle = :box, grid = false,
+          xticks = ([100, 200, 400], ["100", "200", "400"]),
+          background_color_subplot = RGBA(1, 1, 1, 0.92))
     pT, pp
 end
 

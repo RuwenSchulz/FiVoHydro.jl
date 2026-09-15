@@ -72,7 +72,10 @@ and first order once any dissipative sector is on**, because the relaxation is o
 <sub>`examples1d/03_analytic_benchmarks.jl` — the solvers against known results, as pictures rather
 than assertions: ideal Bjorken at orders 2 and 3, viscous Bjorken against the DNMR ODEs, viscous
 Gubser against its semi-analytic solution at three resolutions, and the charm diffusion mode through
-both 1-D solvers against its closed ODE.</sub>
+both 1-D solvers against its closed ODE. ⚠ In (c) and (c′) the **first cell** sits off the curve.
+That is the axis cell at $r = \Delta r/2$ — a *different physical point* at every resolution, so no
+sequence of those dots measures anything. The inset does the honest test, at a **fixed** radius:
+$|\Delta T|/T$ = 1.20 → 0.196 → 0.030 % over $N_r$ = 100 → 400.</sub>
 
 ---
 
@@ -422,7 +425,7 @@ step and the Rusanov dissipation read the speed), so it was left for a deliberat
 | first order in time once anything dissipative is on | the operator split (1-D and 2-D); halve `CFLτ` to check. The IS2 solver is unsplit RK4 |
 | the 1-D cold-start recovery with `ConformalHQEOS` fails at α ≲ −20 | its initial guess $T_0 = E^{1/4}$ ignores $a_{SB}\hbar c^{-3}$, and the φ direction is too badly scaled when $n \sim e^{-24}$. `LatticeHRGEOS` converges at every α tried; production is unaffected. Use a charge-free EOS (`ConformalHQEOS(m_hq = 0, g_hq = 0)`) for charge-free tests |
 | **the shear sector is acausal for C_s = `tauShear_coeff` > 1/2** | conformal IS needs η/(τ_π(e+P)) = C_s ≤ 1/2, and an acausal IS theory is unstable in a moving frame. With the ∂_τu^r fix the 1-D solver shows it: viscous Gubser runs at C_s ≤ 0.6 and runs away at 0.8 (growing with resolution). The builders warn. ⚠ `run_sim_ideal_diff_visc` still defaults to C_s = 1 (production passes 0.2) |
-| the axis cell | carries an O(dr) mismatch between the solver's acceleration and $\nabla T$ (gate T4: halves with each refinement) |
+| the axis cell | carries an O(dr) mismatch between the solver's acceleration and $\nabla T$ (gate T4: halves with each refinement). **Quote from $r > \Delta r$, not from cell 1.** Measured on viscous Gubser (η/s = 0.02, τ = 1 → 2), cell 1 is 7.30 / 2.43 / 0.99 / 0.42 % in $T$ at $N_r$ = 100/200/400/800 — first order, and at a *moving* radius. At a **fixed** $r$ = 0.3 fm the same runs give 1.20 / 0.196 / 0.030 / 0.0053 % (order ≈ 2.5), and $\bar\pi$ at $r$ = 0.15 fm goes 6.9e-4 → 1.5e-4 → 1.5e-5 → 2.0e-6. ⛔ It is **not** the timestep and **not** the axis BC: tripling the step count moves cell 1 by < 1 % of its own error, SSPRK3 changes nothing, and disabling the $r=0$ shear-isotropy overwrite in `apply_bc!` moves $\bar\pi$ from −2.00e-3 to −1.87e-3 while making $T$ slightly worse. It is the geometric $\sim 1/r$ source in the first cell; the cure is resolution |
 | the dilute edge | floors, the vacuum ramp (IS2, 2-D) and the relativistic front at the fireball edge shape the tail: quote from $T > T_{\rm fo}$ |
 | the vorticity couplings are off by default | they vanish in 1+1D; in 2+1D see `README2D.md` §7 |
 | no thermal fluctuations, no $c_M$ back-coupling in 2+1D | not implemented |
