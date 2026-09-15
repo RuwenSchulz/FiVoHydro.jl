@@ -390,6 +390,51 @@ which is why it is unconditionally stable where an explicit scheme on the same m
 
 ---
 
+## 10b. The axis cell, and one rejected repair (2026-09-15)
+
+The first physical cell is the least accurate cell in the domain, and this section records *why*, so
+the diagnosis is not repeated.
+
+**How cell 1 differs.** Every other cell updates as
+$\dot U_i = -(r_{i+1/2}F_{i+1/2} - r_{i-1/2}F_{i-1/2})/(r_i\Delta r) + S_i$. At the axis $r_{-}=0$,
+so the same expression collapses to $\dot U_1 = -2F_{1/2}/\Delta r + S_1$ — algebraically **exact**
+(verified), but it leaves cell 1 resting on a *single* face, amplified by $2/\Delta r$, with no
+second face to cancel against.
+
+**What has to cancel.** The radial momentum source carries
+$S_{S_r} \supset (P + \Pi + \pi^\phi_\phi)/r$ (`fluxes.jl:161`), which in cell 1 is $\sim 2P/\Delta r$
+— the same size as the flux term, opposite sign. The scheme is **well balanced**: on a uniform static
+fluid the two cancel to machine zero ($\max|u^r| = 0$ exactly, at $N_r$ = 100/200/400/800). With
+curvature they cancel only to truncation, and the residual is what cell 1 shows.
+
+**Three causes ruled out by measurement**, on viscous Gubser (η/s = 0.02, τ = 1 → 2):
+
+| candidate | test | verdict |
+|---|---|---|
+| the timestep / integrator | CFL 0.15 → 0.05, CFLτ 0.005 → 0.002 (3× the steps); SSPRK3 | **no** — cell 1 moves by < 1 % of its own error. The error is purely spatial |
+| the $r=0$ shear-isotropy BC (`apply_bc!` sets $\pi^r_r = -\pi^\eta_\eta/2$ in cell 1, exact only *at* $r=0$) | disable it | **no** — $\bar\pi$ moves −2.00e-3 → −1.87e-3 and $T$ gets slightly *worse* |
+| the initial condition (point value vs $r$-weighted cell average) | integrate the exact profile over cell 1 | **no** — the difference is 2.3e-6 at $N_r$ = 100, four orders too small |
+| θ at the axis | compare to the analytic $\theta$ | **no** — second order, and cell 1 is *better* than cell 2 (3.0e-5 vs 1.5e-4 at $N_r$ = 100) |
+
+**The rejected repair.** The axis face is also the one place MUSCL is off: `reconstruction.jl`
+computes slopes only from `ng+2`, and face `ng+1` falls in the first-order branch. Enabling both
+there does help *some* quantities and was still **rejected**:
+
+| | shipped | axis reconstruction |
+|---|---|---|
+| cell 2, rel $T$ err | 0.60 % | **−0.04 %** |
+| cell 1, rel $T$ err | **2.43 %** | 3.05 % |
+| $L_2(T)$, $N_r$ = 800, η/s = 0.02 | **2.614e-04** | 3.786e-04 (**+45 %**) |
+| $L_2(\bar\pi)$, same | 1.500e-02 | **1.179e-02** (−21 %) |
+| order $T$ | **1.77** | 1.62 |
+
+It trades a 15–21 % gain in $\bar\pi$ for a **32–45 % loss in $T$** (both η/s = 0.005 and 0.02), and
+$T$ is the field every result in this repository quotes. A genuine cure is a proper axis treatment —
+a grid with a *face* on the axis, or an $O(\Delta r^2)$ reconstruction of the geometric source
+against the flux — not a switch. Until then: **quote from $r > \Delta r$**.
+
+---
+
 ## 11. Where each piece lives
 
 | file | what |
