@@ -27,8 +27,8 @@ jobs:
       # forward map on the production locus, and the three charm/term gates (~30 s). It is a SMOKE
       # TEST, not the validation ladder: it exercises no fluxes on a physical IC and no regulators.
       # The two full ladders stay manual —
-      #   julia -t auto --project=. test/run1d_gates.jl      #  9 gates, ~8 min
-      #   julia -t auto --project=. test/run2d_gates.jl      # 22 gates, tens of minutes
+      #   julia -t auto --project=. test/run1d_gates.jl      # 10 gates, ~8 min
+      #   julia -t auto --project=. test/run2d_gates.jl      # 22 gates, ~30 min
       # Run them after touching src/ or src2d/. See README.md §5, README2D.md §5, TWOD_PROGRAM.md §6.
       - name: Run 2-D gates (fast tier)
         run: FIVO2D_TIER=fast julia -t auto --project=. test/run2d_gates.jl

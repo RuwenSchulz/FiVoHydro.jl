@@ -1,7 +1,7 @@
 name = "FiVoHydro"
 uuid = "a29fd207-538d-4e6d-8a9a-2f381910c108"
 version = "0.1.0"
-authors = ["rschulz"]
+authors = ["Ruwen Schulz <ruwen-schulz@hotmail.de>"]
 
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"

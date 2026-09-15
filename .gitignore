@@ -17,3 +17,13 @@ plots2d/
 # this package untracked 6.9 MB of figures on 2026-09-08 for the same reason. The static PNGs in
 # examples2d/figures/ ARE tracked; only the gifs are not.
 examples2d/figures/anim/
+
+# editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.bak
+*.orig

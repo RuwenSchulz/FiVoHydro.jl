@@ -4,6 +4,11 @@ Every equation the two 1+1D solvers integrate, one term at a time: what it is, w
 code, how to switch it off, and which gate checks it. The 2+1D twin is [`EQUATIONS2D.md`](EQUATIONS2D.md);
 the front door is [`README.md`](README.md).
 
+> ⚠ Paths beginning `Julia/Projects/…` or `Tex/…` name the **private research repository** this
+> package is developed in. They are cited for provenance — so a number can be traced to the script
+> that produced it — and are not links you can follow from a clone of this package.
+
+
 | solver | file | what it evolves |
 |---|---|---|
 | **bulk** | `main.jl` (module `hydro`) | the medium $(T, u^r, \Pi, \pi)$ and a diffusing charge $(n, \nu^r)$ — §1–§4 |

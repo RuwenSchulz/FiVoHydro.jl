@@ -6,6 +6,11 @@ Israel–Stewart shear and bulk stresses, and a diffusing heavy-quark (charm) ch
 also carries the **thermodynamically consistent** charm first moment and a passive charm second
 moment. It is the 2-D sibling of the 1+1D radial solver in `main.jl` and shares six
 dimension-agnostic files with it, plus the common I/O layer `src/fields_io.jl`
+
+> ⚠ Paths beginning `Julia/Projects/…` or `Tex/…` name the **private research repository** this
+> package is developed in. They are cited for provenance — so a number can be traced to the script
+> that produced it — and are not links you can follow from a clone of this package.
+
 (`README.md`, "How the solvers share code").
 
 | document | what it is for |

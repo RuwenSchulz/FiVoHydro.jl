@@ -5,6 +5,11 @@ what it is, where it lives in the code, how to switch it off, and which gate che
 the reference; the chronological build log with every wrong turn is `TWOD_PROGRAM.md`, and the
 front door is `README2D.md`.
 
+> ⚠ Paths beginning `Julia/Projects/…` or `Tex/…` name the **private research repository** this
+> package is developed in. They are cited for provenance — so a number can be traced to the script
+> that produced it — and are not links you can follow from a clone of this package.
+
+
 The same information at run time, for the model you actually built:
 
 ```julia
