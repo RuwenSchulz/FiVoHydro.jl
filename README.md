@@ -342,7 +342,7 @@ listed gate whose file has gone missing counts as a failure.
 | **IO** the output format | `save_fields` → `load_fields` for all three solvers: fields bit for bit, the terms and knobs that made them, and the "plain types" promise re-checked in a process that loads only JLD2 | 21/21, 12 s |
 | IS2 drive, IS2 speeds, density frame, BDNK, M1 | as before (also in `Pkg.test()`) | — |
 
-**2+1D:** 22 gates (21 + Gd, the medium DNMR couplings; Gt now includes Gt7/Gt8), **22/22 on 2026-09-14**, listed in `README2D.md` §5. Cross-code gates against Fluidum live in
+**2+1D:** 22 gates (21 + Gd, the medium DNMR couplings; Gt now includes Gt7/Gt8), **22/22 on 2026-09-15** (≈29 min), listed in `README2D.md` §5 — which also prints **what each gate measured**, gate by gate. Cross-code gates against Fluidum live in
 `Julia/Projects/FiVoFluidumComparison/` (three of them in `programme.jl check`).
 
 `Julia/Projects/FiVoBenchmark/` (`run_all_benchmarks.jl`, about 5 min, writes `BENCHMARK_REPORT.md`) is the older
