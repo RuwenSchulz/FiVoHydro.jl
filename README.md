@@ -1,8 +1,12 @@
 # FiVoHydro.jl — FiVo
 
-FiVo is a finite-volume solver for boost-invariant relativistic viscous hydrodynamics with a diffusing
-heavy-quark (charm) charge, written for heavy-quark transport in heavy-ion collisions. It has one term
-interface, one set of analytic referees and one output format across three solvers:
+[![CI](https://github.com/RuwenSchulz/FiVoHydro.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/RuwenSchulz/FiVoHydro.jl/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+**A finite-volume solver for boost-invariant relativistic viscous hydrodynamics with a diffusing
+heavy-quark (charm) charge**, written for heavy-quark transport in heavy-ion collisions.
+
+Three solvers share one term interface, one set of analytic referees and one output format:
 
 | solver | driver → module | evolves | geometry |
 |---|---|---|---|
@@ -13,17 +17,142 @@ interface, one set of analytic referees and one output format across three solve
 Scheme: HLLE + MUSCL (MC limiter) in primitive variables, SSPRK2/3, operator-split relaxation of the
 dissipative fields, MOOD fallback. The IS2 solver is a quasi-linear 5×5 system with RK4.
 
-| document | what it is for |
-|---|---|
-| **this file** | the front door: which solver, quickstart, the term switches, input/output, validation, cost, limitations |
-| [`EQUATIONS1D.md`](EQUATIONS1D.md) | every 1+1D equation, term by term — formula, code, switch, gate — and the corrections log |
-| [`README2D.md`](README2D.md), [`EQUATIONS2D.md`](EQUATIONS2D.md) | the same for 2+1D |
-| [`examples1d/`](examples1d/README.md), [`examples2d/`](examples2d/README.md) | runnable examples, seconds to minutes each, with figures. ⚠ they need `Plots`, which is **not** a dependency of this package |
-| [`TWOD_PROGRAM.md`](TWOD_PROGRAM.md) | the 2-D build log (chronological, retractions included) |
+![a real Pb+Pb event](examples2d/figures/ex10_showcase_N400.png)
 
-This package is a git submodule of `phd-git`. Scripts `include` a driver and run with
-`--project=Julia/FiVoHydro.jl`. `Julia/FiVo2DIdeal.jl` is an unrelated flat-Minkowski ideal code, used
-only as a Riemann-problem benchmark. "2-D FiVo" means `main2D.jl` here.
+<sub>One un-averaged MC-Glauber Pb+Pb event at N = 400, every sector on, run to τ = 8 fm/c, from
+`examples2d/10_showcase.jl`. Reading across: the charm density with the Bjorken $1/\tau$ dilution
+divided out, the same weighted toward the edge, then $|\omega|/|\sigma|$ — where the flow swirls
+rather than shears — and the charm shear stress $|\pi_Q|$. The white line is freeze-out.
+⚠ At $c_M = 0$ the charm second moment is **passive**: switching the vorticity coupling on moves
+$\pi_Q$ and *nothing else*, so the claim is the bottom-right panel, not the fireball ones.</sub>
+
+---
+
+## Does it work? — the short version
+
+Every number below is produced by a script; none is transcribed by hand. The two ladders were last
+re-run on **2026-09-15**, the examples on 2026-09-14. The cross-code work is in the private research
+repository this package is developed in (see the note under "Cross-checks").
+
+| | | |
+|---|---|---|
+| **1+1D validation ladder** | `test/run1d_gates.jl` | **10 / 10** |
+| **2+1D validation ladder** | `test/run2d_gates.jl` | **22 / 22** |
+| **unit + fast tier (CI)** | `Pkg.test()` | green |
+| **worked examples** | `examples1d/`, `examples2d/` | **13 / 13** run clean |
+| **cross-code, vs an independent code** | 5 algebraic gate files + a 15-gate 1+1D solve comparison | all pass (below) |
+
+Every gate compares against a **referee that is not the code under test** — a closed form, a
+semi-analytic ODE integrated to 1e-10, or a second, independently written solver.
+
+### Error estimates, measured
+
+| what | against | measured |
+|---|---|---|
+| ideal Bjorken, 1+1D | $T\tau^{1/3}$ = const, and the $(e,n)$ ODE | convergence order **2.00** (SSPRK2) / **2.99** (SSPRK3); $T$ to 2e-9 |
+| viscous Bjorken, 1+1D | the 0+1D DNMR ODEs, term by term | Richardson-extrapolated error ≤ **3e-4** |
+| **viscous Gubser, 1+1D** | its semi-analytic ODE | $L_2(T)$ = **2.6e-4**, $L_2(\bar\pi)$ = **1.5 %** at $N_r$ = 800; order **1.77** in $T$ |
+| charm diffusion mode | one closed $J_0/J_1$ ODE judging **all three solvers** | amplitude ≤ 3e-3, current ≤ 1 % |
+| Bjorken, 2+1D | the 0+1D Israel–Stewart system | order **2.00** |
+| Gubser, 2+1D | the exact solution | order **1.96** |
+| sound attenuation, 2+1D | the **exact** MIS dispersion root | the excess damping is first order in $\Delta x$ — it is the scheme's own numerical viscosity, not a missing term |
+
+The one number to read before quoting any other: **the scheme is second order in the ideal sector
+and first order once any dissipative sector is on**, because the relaxation is operator-split. Halve
+`CFLτ` and the error halves. See "Known limitations".
+
+![analytic benchmarks](examples1d/figures/ex03_analytic_benchmarks.png)
+
+<sub>`examples1d/03_analytic_benchmarks.jl` — the solvers against known results, as pictures rather
+than assertions: ideal Bjorken at orders 2 and 3, viscous Bjorken against the DNMR ODEs, viscous
+Gubser against its semi-analytic solution at three resolutions, and the charm diffusion mode through
+both 1-D solvers against its closed ODE.</sub>
+
+---
+
+## Cross-checks against a second, independent code
+
+FiVo is checked row by row and solve by solve against **Fluidum.jl**, a hydrodynamics code with a
+different discretisation (primitive-variable upwind on a quasi-linear matrix, adaptive Tsit5,
+dissipation *inside* the matrix rather than operator-split) and different authors. Two codes agreeing
+is not proof — but a gate that shows they discretise **the same PDE** to 1e-11, together with a
+control that *fails*, is evidence neither code can produce alone.
+
+| | measured |
+|---|---|
+| the two codes discretise the same PDE, every row of the 2+1D viscous system | **1e-11**, against a referee that is neither code |
+| …and the control works | the other code's superseded matrix **fails the same test at 192 %** |
+| charm second moment, 2+1D, on genuinely 2-D states | **2.2e-16**, all four switch combinations |
+| transverse charm first moment, vs a closed form with real transverse structure supplied by neither code | FiVo converges to it: **1.05 → 0.53 → 0.43 %** at N = 32/48/64, worst single cell 0.8 % |
+| **1+1D medium, Bjorken** | agreement to **2.3e-6** once FiVo's operator split is Richardson-extrapolated away — *below* the 1.3e-5 floor set by the two codes' differing $\hbar c$ constants |
+| **1+1D medium, fireball** | the difference converges in every field and every sector: $T$ 0.33 → 0.16 % (ideal), 0.28 → 0.09 % (shear), 0.30 → 0.13 % (shear+bulk) over $N$ = 100 → 200 |
+| **which code is closer to the continuum** (2+1D, real Pb+Pb event) | each code against its **own** Richardson limit at 384²: FiVo's own discretisation error is **8.7–25× smaller in $T$** and **3.4–19× smaller in $u^x$**, and there the two limits **meet** (0.24–0.38 % in $T$), which is what makes the ranking mean anything. ⚠ In the **charm** fields the limits are 13–44 % apart at τ = 4 and 8 and **no ranking may be read there** |
+
+![FiVo vs an independent code, 1+1D](docs/figures/crosscheck_1p1d.png)
+
+<sub>**1+1D.** Top left: both codes against one closed form. Top right: the whole FiVo–Fluidum
+difference on Bjorken **is** FiVo's operator split — its *local* convergence order falls to 0.89 as
+the Milne step is refined 8×, and extrapolating the split away (orange star) lands below the $\hbar c$
+floor. Bottom: the fireball profiles, and the code-to-code difference converging like $1/N$ in all
+three sectors.</sub>
+
+![which code is closer to the continuum](docs/figures/crosscheck_self_convergence.png)
+
+<sub>**2+1D, a real Pb+Pb event.** Each code against its own Richardson limit at 384². ⚠ **Hollow
+markers are points where the two Richardson limits do not meet — no ranking may be read off them**
+(the charm fields at τ = 4 and 8, where a regulator that does not refine with the grid dominates).
+The bottom panel is that test. A `fit failed` label means the order fit did not converge, so that
+code's "error" there is zero *by construction*, not by accuracy.</sub>
+
+![the 2+1D code-to-code difference against resolution](docs/figures/crosscheck_2p1d_convergence.png)
+
+<sub>**2+1D.** The code-to-code difference in $T$ against resolution, three initial conditions ×
+three sectors. It is the *slope* that carries the claim, not the height — two codes sitting at a
+fixed offset would be agreeing about a shared mistake. In the `ideal` and `mis` sectors the
+difference falls at first order in every quantity. ⚠ **In `full` it stalls** (0.70–1.24× in $T$ and
+$u^x$, while $n$ keeps converging at ~1.95×), and that is not a solver defect in either code: FiVo
+carries the DNMR second-order coefficient $\delta_{\pi\pi} = \tfrac43 \tau_\pi$ and Fluidum's plain
+Israel–Stewart has **no such coefficient at all**. Setting $\delta_{\pi\pi} = 0$ restores convergence
+in exactly the quantities that had stalled — which is how a genuine missing term behaves and a
+numerical accident does not.</sub>
+
+⚠ The comparison lives in the private research repository this package is developed in; the figures
+above are **copies**, with provenance and regeneration commands in
+[`docs/figures/README.md`](docs/figures/README.md).
+
+---
+
+## Worked examples
+
+Thirteen runnable examples — three 1+1D, ten 2+1D — seconds to minutes each, each producing the
+figure beside it. They are written to be **copied and edited**, and every trap this solver has
+actually shipped is called out in a comment where it would bite.
+
+| | |
+|---|---|
+| [`examples1d/`](examples1d/README.md) | the 1+1D library interface, the term switches, the analytic benchmarks |
+| [`examples2d/`](examples2d/README.md) | ten 2+1D examples: elliptic flow, resolution, fluctuating and real events, the dissipative sectors, the charm terms, vorticity, Gubser, and a showcase |
+
+⚠ They need `Plots`, which is **not** a dependency of this package — it resolves through your default
+environment, so a fresh clone must add it. Nothing in `src/`, `src2d/`, `test/` or `bench/` needs it.
+
+![elliptic flow](examples2d/figures/ex02_elliptic_flow.png)
+
+<sub>`examples2d/02_elliptic_flow.jl` — ε₂ → momentum anisotropy, the reason to run 2+1D at all, run
+sector by sector from **one** initial condition so the difference is the sector and not the IC, with
+the ε₂ = 0 control that must return identically zero.</sub>
+
+---
+
+This package is a git submodule of a private research repository. Scripts `include` a driver and run
+with `--project=Julia/FiVoHydro.jl`. `Julia/FiVo2DIdeal.jl` is an unrelated flat-Minkowski ideal code,
+used only as a Riemann-problem benchmark. "2-D FiVo" means `main2D.jl` here.
+
+> ⚠ **Paths beginning `Julia/Projects/…` or `Tex/…` are in that research repository, not in this
+> one.** They are named throughout this document for provenance — so a number can be traced to the
+> script that produced it — and are not links you can follow from a clone of this package. Everything
+> needed to *run and check* FiVo is here: `src/`, `src2d/`, `test/`, `bench/`, `examples1d/`,
+> `examples2d/`.
 
 ---
 
@@ -42,6 +171,33 @@ density-frame current solvers are separate closures of the same charm problem (E
 ---
 
 ## 2. Quickstart
+
+### Install
+
+```sh
+git clone https://github.com/RuwenSchulz/FiVoHydro.jl.git
+cd FiVoHydro.jl
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
+julia --project=. -e 'using Pkg; Pkg.test()'      # the unit + fast tier
+```
+
+CI tests on **Julia 1.11**, and the checked-in `Manifest.toml` is resolved for 1.11.5; development here
+also runs on 1.12. The solvers depend only on the packages in `Project.toml`. The **examples**
+additionally need `Plots`, which resolves through your default environment
+(`julia -e 'using Pkg; Pkg.add("Plots")'`).
+
+⚠ On Julia 1.12, `instantiate` prints two warnings — the manifest was resolved with 1.11.5, and the
+project hash is stale (a `DelimitedFiles` entry was added by hand rather than by a re-resolve, §8).
+**Both are cosmetic**: all three drivers load and solve from a fresh clone on 1.12. `Pkg.resolve()`
+silences them but rewrites the whole stdlib set to 1.12 and would break the 1.11 CI, so the manifest
+is deliberately left as it is.
+
+⚠ The snippets below are written as they are run inside the research repository this package is
+developed in, so they say `Julia/FiVoHydro.jl/main.jl` and `--project=Julia/FiVoHydro.jl`. **From a
+standalone clone, drop the prefix**: start with `julia -t auto --project=.` and `include("main.jl")`.
+Nothing else changes.
+
+### A first run
 
 **1+1D medium + charge**, in a REPL started with `julia -t auto --project=Julia/FiVoHydro.jl`:
 
@@ -250,7 +406,7 @@ step and the Rusanov dissipation read the speed), so it was left for a deliberat
 
 ---
 
-## 8. Corrections of 2026-09-11 and 2026-09-13
+## 8. Corrections of 2026-09-11, 09-13 and 09-14
 
 Found while building the 1+1D ladder. Each one is at its code and in `EQUATIONS1D.md` §8:
 - **∂_τu^r in the 1-D relaxation (production path).** It came out at ~4% of its value. Against viscous Gubser

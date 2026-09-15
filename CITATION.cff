@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+title: "FiVoHydro.jl — a finite-volume solver for boost-invariant relativistic viscous hydrodynamics with a diffusing heavy-quark charge"
+message: "If you use this software, please cite it using these metadata."
+type: software
+authors:
+  - given-names: Ruwen
+    family-names: Schulz
+    email: ruwen-schulz@hotmail.de
+repository-code: "https://github.com/RuwenSchulz/FiVoHydro.jl"
+license: Apache-2.0
+version: "0.1.0"
+abstract: >-
+  FiVoHydro.jl (FiVo) solves boost-invariant relativistic viscous hydrodynamics in
+  Milne coordinates together with a diffusing heavy-quark (charm) charge, in radial
+  1+1D and transverse 2+1D. The scheme is conservative finite volume: HLLE with MUSCL
+  reconstruction in primitive variables, SSPRK2/3 time stepping, operator-split
+  relaxation of the dissipative fields, and a MOOD fallback. It ships a validation
+  ladder in which every gate is judged by a referee that is not the code under test —
+  a closed form, a semi-analytic ODE, or a second, independently written solver.
+keywords:
+  - relativistic hydrodynamics
+  - heavy-ion collisions
+  - heavy-quark diffusion
+  - Israel-Stewart
+  - finite volume
+  - Julia

@@ -15,7 +15,21 @@ must call it itself, as example 02 does.
 =#
 ENV["GKSwstype"] = "100"
 using Printf, Plots
-gr(); default(; fontfamily = "sans-serif", framestyle = :box, grid = false, dpi = 150, lw = 2)
+# Figure style, shared by every example in BOTH packages (2026-09-14). dpi 200 and the larger
+# fonts are for the GitHub READMEs: they render an image at container width (~900 px), so a
+# 1700-px-wide figure is downscaled and 8 pt tick labels turn to mush. Keep the two packages
+# identical — a reader comparing FiVo and Fluidum plots should not be reading two house styles.
+gr(); default(; fontfamily = "sans-serif", framestyle = :box, grid = false, dpi = 200, lw = 2.2,
+               titlefontsize = 11, guidefontsize = 10, tickfontsize = 9, legendfontsize = 8,
+               foreground_color_legend = nothing, background_color_legend = RGBA(1,1,1,0.75),
+               left_margin = 9Plots.mm, bottom_margin = 6Plots.mm, right_margin = 3Plots.mm,
+               colorbar_titlefontsize = 8,   # ⚠ at 10 pt the colorbar TITLE overlaps its own
+                                             # tick labels on every map panel (measured on ex10)
+               top_margin = 2Plots.mm)
+# ⚠ the margins are NOT cosmetic. Raising the font sizes above without them silently DROPS the axis
+# labels and clips the y-label off the left edge — GR gives the axis whatever space is left after the
+# panel, and at dpi 200 with 10 pt guides there is none. Measured on ex01: "τ [fm/c]" vanished from
+# all three panels and reappeared only once the margins were set.
 
 const _ROOT = normpath(joinpath(@__DIR__, ".."))
 include(joinpath(_ROOT, "main.jl")); include(joinpath(_ROOT, "main2D.jl"))
@@ -133,7 +147,7 @@ splitting_ladder(g, m, ic, Tr)
 println("    the ratio approaches 2 — first order, as the splitting requires. The coarsest rung is")
 println("    not asymptotic yet, which is exactly why a convergence claim needs THREE points.")
 
-plt = plot(layout = (1,3), size = (1150, 360), legend = :topright)
+plt = plot(layout = (1,3), size = (1150, 440), legend = :topright)
 plot!(plt[1], τs, Ts; label = "solver", xlabel = "τ  [fm/c]", ylabel = "T  [GeV]", title = "temperature")
 scatter!(plt[1], [TAUF], [Tr]; label = "Bjorken reference", ms = 6, mc = :black)
 plot!(plt[2], τs, πs; label = "solver", xlabel = "τ  [fm/c]", ylabel = "π^η_η  [GeV/fm³]", title = "shear")

@@ -17,6 +17,10 @@ julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/09_gubs
 julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/10_showcase.jl
 ```
 
+⚠ **Running these from a standalone clone**: the commands above are written as they are run inside the
+research repository this package is developed in. From a clone of `FiVoHydro.jl` alone, drop the
+prefix — `julia -t auto --project=. examples2d/01_first_run.jl`. Nothing else changes.
+
 ⚠ **`Plots` is not a dependency of this package.** These examples `using Printf, Plots`, and
 `Plots` is in neither `Project.toml` nor `Manifest.toml` — so `--project=Julia/FiVoHydro.jl`
 finds it only through the shared default environment, and a fresh clone will fail at the
@@ -36,6 +40,48 @@ or add it to this package's `Project.toml` before running them. Nothing in `src/
 | **08** vorticity on vs off | `m2_vorticity` measured rather than assumed: \|ω\|/\|σ\| over the fireball, what the term moves in π_Q and Π_Q, and the proof that it moves neither the medium nor the current |
 | **09** Gubser flow | the one 2-D problem with an exact answer: solver beside the closed form, and the convergence order that turns "looks right" into a number |
 | **10** the showcase | the same solver with nothing switched off — a real Pb+Pb event, `m2_vorticity = true`, run long and fine, drawn for the eye rather than for a table. It measures nothing new; read it for how to render a run, and for why `n·τ` and `n·(r+r₀)·τ` are the panels that keep their structure |
+
+## The figures
+
+### 01 the first run · 02 elliptic flow · 03 choosing a resolution
+
+The whole API on a transversely uniform state, which must integrate the 0+1D DNMR equations; then
+ε₂ → momentum anisotropy, the reason to run 2+1D at all, with the ε₂ = 0 control that must return
+identically zero; then the three-grid Richardson study, and why a field, an observable and a
+conserved quantity converge at three different rates.
+
+![the first run](figures/ex01_bjorken.png)
+![elliptic flow](figures/ex02_elliptic_flow.png)
+![choosing a resolution](figures/ex03_convergence.png)
+
+### 04 a fluctuating event · 05 the dissipative sectors · 06 the charm terms
+
+![a fluctuating event](figures/ex04_fluctuating_event.png)
+![the dissipative sectors](figures/ex05_sectors.png)
+![the charm terms](figures/ex06_charm_terms.png)
+
+### 07 a real event · 08 vorticity · 09 Gubser
+
+One un-averaged MC-Glauber Pb+Pb event to freeze-out, raw against lightly smoothed; `m2_vorticity`
+measured rather than assumed; and the one 2-D problem with an exact answer.
+
+⚠ The vorticity figure shown is the **N = 640** render (`EX08_N=640`, ~12 min), not the N = 160 the
+default run produces — the filaments are the point and they need the grid. The default writes
+`ex08_vorticity.png` beside it, and the conclusion is the same: the median |ω|/|σ| moves 3.01e-2 →
+2.79e-2 from N = 160 to 640, i.e. it **converges**. Same for the showcase below, committed at
+N = 400 against a default of 240.
+
+![a real event](figures/ex07_real_event.png)
+![vorticity on vs off](figures/ex08_vorticity_N640.png)
+![Gubser flow](figures/ex09_gubser.png)
+
+### 10 the showcase
+
+Same solver, nothing switched off, run long and fine, drawn for a slide rather than for a table.
+⚠ read the charm-stress panel, not the fireball ones: at `c_M = 0` the second moment is passive, so
+`m2_vorticity = true` moves π_Q and **nothing else** — T, u^i and ν^i are bit-identical.
+
+![the showcase](figures/ex10_showcase_N400.png)
 
 **Four of them write ANIMATIONS** into `figures/anim/` (gifs, a few MB each, **not tracked by
 git** — regenerable, and this package untracked 6.9 MB of figures once already):

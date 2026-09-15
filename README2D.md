@@ -243,6 +243,7 @@ Outside this package, in `Julia/Projects/FiVoFluidumComparison/`:
 | `gate_2p1d_m2.jl` | second-moment rows, FiVo vs Fluidum at identical states |
 | `test/test_diffusion_mode.jl` (X1, the 1-D ladder) | the charm current on a radial diffusion mode: **this solver, the 1-D bulk solver and the 1-D IS2 solver** against one closed-form referee, four term configurations |
 | `COMPARISON_2P1D.md` | the solve-vs-solve record (a real Pb+Pb event to freeze-out, §37) |
+| `compare_examples_1p1d.jl`, `COMPARISON_1P1D.md` | the **1+1D** medium against Fluidum on the worked-example configurations — 15/15, and the first such comparison of that sector |
 
 ---
 
