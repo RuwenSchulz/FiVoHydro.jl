@@ -1,6 +1,6 @@
 # FiVoHydro 2+1D — worked examples
 
-Ten runnable setups for `main2D.jl` / `src2d/`, each seconds to a few minutes, each producing a figure in
+Eleven runnable setups for `main2D.jl` / `src2d/`, each seconds to a few minutes, each producing a figure in
 `figures/`. They are written to be **copied and edited**, and every trap this solver has actually
 shipped is called out in a comment where it would bite.
 
@@ -15,6 +15,7 @@ julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/07_real
 julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/08_vorticity.jl
 julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/09_gubser.jl
 julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/10_showcase.jl
+julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/11_swirl_showcase.jl
 ```
 
 ⚠ **Running these from a standalone clone**: the commands above are written as they are run inside the
@@ -40,6 +41,7 @@ or add it to this package's `Project.toml` before running them. Nothing in `src/
 | **08** vorticity on vs off | `m2_vorticity` measured rather than assumed: \|ω\|/\|σ\| over the fireball, what the term moves in π_Q and Π_Q, and the proof that it moves neither the medium nor the current |
 | **09** Gubser flow | the one 2-D problem with an exact answer: solver beside the closed form, and the convergence order that turns "looks right" into a number |
 | **10** the showcase | the same solver with nothing switched off — a real Pb+Pb event, `m2_vorticity = true`, run long and fine, drawn for the eye rather than for a table. It measures nothing new; read it for how to render a run, and for why `n·τ` and `n·(r+r₀)·τ` are the panels that keep their structure |
+| **11** the swirl showcase | a deliberately extreme event — 50 hot spots and a rigid-body swirl — with every transport sector on, run to τ = 12 fm/c. ⚠ a PICTURE, not a measurement: the IC is synthetic and tuned for drama. Read it for what vorticity does to a lumpy medium, and for the \|ω\|/\|σ\| row, which starts near-black (rigid rotation is shear-free) and builds vortex sheets that grow while the swirl itself decays |
 
 ## The figures
 
@@ -82,6 +84,20 @@ Same solver, nothing switched off, run long and fine, drawn for a slide rather t
 `m2_vorticity = true` moves π_Q and **nothing else** — T, u^i and ν^i are bit-identical.
 
 ![the showcase](figures/ex10_showcase_N400.png)
+
+### 11 the swirl showcase
+
+Fifty hot spots on the production profile, spun with a rigid-body swirl, every sector on, run to
+τ = 12 fm/c at N = 560. Four fields × four times: **T**, the charm density with the Bjorken dilution
+divided out, **|ω|/|σ|**, and the charm shear stress.
+⚠ The swirl is an INITIAL CONDITION, not a conserved spin — Milne with boost invariance carries no
+transverse angular-momentum law, so it decays. What survives is the vorticity it seeded: the
+|ω|/|σ| row starts near-black (rigid rotation is shear-free) and builds bright vortex sheets that
+are strongest at the *last* frame.
+⚠ At `c_M = 0` the charm second moment is passive, so `m2_vorticity = true` moves the |π_Q| row and
+**nothing else**.
+
+![the swirl showcase](figures/ex11_swirl_N560_tau12p0_sw0p22.png)
 
 **Four of them write ANIMATIONS** into `figures/anim/` (gifs, a few MB each, **not tracked by
 git** — regenerable, and this package untracked 6.9 MB of figures once already):

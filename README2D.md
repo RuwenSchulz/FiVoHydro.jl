@@ -202,6 +202,7 @@ julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/06_char
 | 08 vorticity on vs off | `m2_vorticity` measured on that event: \|ω\|/\|σ\|, and what it moves in π_Q; **animation**. `EX08_N=480`/`640` render it at 3×/4×, and the answer **converges** (median 3.01e-2 → 2.84e-2 → 2.79e-2) | 30 s |
 | 09 Gubser flow | the solver against an exact solution, and the convergence order; **animation** | 1.5 min |
 | 10 the showcase | one real Pb+Pb event, every sector on and `m2_vorticity = true`, run long at high resolution and rendered for a slide rather than for a table; **animation**. `EX10_N`/`EX10_TAUF`/`EX10_NFRAME` override the defaults | 72 s |
+| 11 the swirl showcase | 50 hot spots + a rigid-body swirl, every sector on, τ → 12 fm/c; the \|ω\|/\|σ\| panel starts near-black and builds vortex sheets as the swirl decays. ⚠ a picture, not a measurement | 2.5 min |
 
 ### The figures they produce
 
@@ -253,7 +254,7 @@ than for a table. ⚠ at `c_M = 0` the charm second moment is **passive**: `m2_v
 fireball ones.</sub>
 
 Times are the suite baseline (`Julia/Projects/suite_baseline.toml`), re-recorded 2026-09-11 after the
-performance pass (10 on 2026-09-14) — the ten together are 591 s, just under 10 minutes. All ten pass: **13/13
+performance pass (10 on 2026-09-14; 11 added 2026-09-15) — the first ten together are 591 s. All pass: **14/14
 FiVo examples on 2026-09-14**, the three 1+1D ones included. The suite runs them all with
 `julia --project=Julia Julia/Projects/run_suite.jl examples --only FiVoHydro`.
 

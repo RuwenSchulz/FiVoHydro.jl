@@ -18,6 +18,11 @@ plots2d/
 # examples2d/figures/ ARE tracked; only the gifs are not.
 examples2d/figures/anim/
 
+# example 11 renders at whatever (N, tau, swirl) you ask for, and every knob goes into the
+# filename. Only the one the README shows is tracked; the rest are yours.
+examples2d/figures/ex11_swirl_*.png
+!examples2d/figures/ex11_swirl_N560_tau12p0_sw0p22.png
+
 # editor / OS noise
 .vscode/
 .idea/

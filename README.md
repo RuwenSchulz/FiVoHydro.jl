@@ -45,7 +45,7 @@ on **2026-09-15**, the worked examples on 2026-09-14.
 | **1+1D validation ladder** | `test/run1d_gates.jl` | **10 / 10** |
 | **2+1D validation ladder** | `test/run2d_gates.jl` | **22 / 22** |
 | **unit + fast tier (CI)** | `Pkg.test()` | green |
-| **worked examples** | `examples1d/`, `examples2d/` | **13 / 13** run clean |
+| **worked examples** | `examples1d/`, `examples2d/` | **14 / 14** run clean |
 | **cross-code, vs an independent code** | 5 algebraic gate files + a 15-gate 1+1D solve comparison | all pass (below) |
 
 Every gate compares against a **referee that is not the code under test** — a closed form, a
@@ -138,14 +138,14 @@ above are **copies**, with provenance and regeneration commands in
 
 ## Worked examples
 
-Thirteen runnable examples — three 1+1D, ten 2+1D — seconds to minutes each, each producing the
+Fourteen runnable examples — three 1+1D, eleven 2+1D — seconds to minutes each, each producing the
 figure beside it. They are written to be **copied and edited**, and every trap this solver has
 actually shipped is called out in a comment where it would bite.
 
 | | |
 |---|---|
 | [`examples1d/`](examples1d/README.md) | the 1+1D library interface, the term switches, the analytic benchmarks |
-| [`examples2d/`](examples2d/README.md) | ten 2+1D examples: elliptic flow, resolution, fluctuating and real events, the dissipative sectors, the charm terms, vorticity, Gubser, and a showcase |
+| [`examples2d/`](examples2d/README.md) | eleven 2+1D examples: elliptic flow, resolution, fluctuating and real events, the dissipative sectors, the charm terms, vorticity, Gubser, and two showcases |
 
 ⚠ They need `Plots`, which is **not** a dependency of this package — it resolves through your default
 environment, so a fresh clone must add it. Nothing in `src/`, `src2d/`, `test/` or `bench/` needs it.
