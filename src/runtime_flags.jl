@@ -115,3 +115,14 @@ function hydro_flags(; refresh::Bool=false)::HydroFlags
 end
 
 @inline sr_margin() = hydro_flags().srscale_margin
+
+# ── the axis cell ────────────────────────────────────────────────────────────────────────────────
+# The first physical cell sits at r = dr/2, NOT at r = 0. Until 2026-09-15 three places treated it
+# as if it were on the axis: `apply_bc!` zeroed its conserved radial momentum S_r, `rhs!` zeroed
+# its u^r, and `reconstruct_muscl_prims!` left its face first order. u^r(dr/2) = dr/2
+# on Gubser — an O(dr) quantity being discarded, which is exactly the first-order error cell 1 used
+# to show. Setting this to "0" restores the pre-2026-09-15 arithmetic bit for bit.
+# Measured (viscous Gubser, eta/s = 0.02, tau = 1 -> 2): RHS error in cell 1 -18.7 % -> +4.5e-5,
+# L2(T) at Nr = 800  2.614e-04 -> 2.780e-05, order in T 1.77 -> 2.12. Ladder 10/10 either way.
+# ⚠ The three act TOGETHER. Reconstruction alone makes cell 1 WORSE (-18.7 % -> -38 %).
+const AXIS_CELL_EXACT = get(ENV, "FIVO_AXIS_CELL_EXACT", "1") == "1"

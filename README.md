@@ -57,25 +57,26 @@ semi-analytic ODE integrated to 1e-10, or a second, independently written solver
 |---|---|---|
 | ideal Bjorken, 1+1D | $T\tau^{1/3}$ = const, and the $(e,n)$ ODE | convergence order **2.00** (SSPRK2) / **2.99** (SSPRK3); $T$ to 2e-9 |
 | viscous Bjorken, 1+1D | the 0+1D DNMR ODEs, term by term | Richardson-extrapolated error ≤ **3e-4** |
-| **viscous Gubser, 1+1D** | its semi-analytic ODE | $L_2(T)$ = **2.6e-4**, $L_2(\bar\pi)$ = **1.5 %** at $N_r$ = 800; order **1.77** in $T$ |
+| **viscous Gubser, 1+1D** | its semi-analytic ODE | $L_2(T)$ = **2.8e-5**, $L_2(\bar\pi)$ = **0.19 %** at $N_r$ = 800; order **2.12** in $T$ |
 | charm diffusion mode | one closed $J_0/J_1$ ODE judging **all three solvers** | amplitude ≤ 3e-3, current ≤ 1 % |
 | Bjorken, 2+1D | the 0+1D Israel–Stewart system | order **2.00** |
 | Gubser, 2+1D | the exact solution | order **1.96** |
 | sound attenuation, 2+1D | the **exact** MIS dispersion root | the excess damping is first order in $\Delta x$ — it is the scheme's own numerical viscosity, not a missing term |
 
-The one number to read before quoting any other: **the scheme is second order in the ideal sector
-and first order once any dissipative sector is on**, because the relaxation is operator-split. Halve
-`CFLτ` and the error halves. See "Known limitations".
+The one number to read before quoting any other: **the dissipative fields are first order in
+$\Delta\tau$**, because the relaxation is operator-split — halve `CFLτ` and their error halves. The
+ideal sector is second order, and since the axis repair of 2026-09-15 (§8) so is $T$ on viscous
+Gubser (order 2.12, with shear on), while $\bar\pi$ stays at 1.01. See "Known limitations".
 
 ![analytic benchmarks](examples1d/figures/ex03_analytic_benchmarks.png)
 
 <sub>`examples1d/03_analytic_benchmarks.jl` — the solvers against known results, as pictures rather
 than assertions: ideal Bjorken at orders 2 and 3, viscous Bjorken against the DNMR ODEs, viscous
 Gubser against its semi-analytic solution at three resolutions, and the charm diffusion mode through
-both 1-D solvers against its closed ODE. ⚠ In (c) and (c′) the **first cell** sits off the curve.
-That is the axis cell at $r = \Delta r/2$ — a *different physical point* at every resolution, so no
-sequence of those dots measures anything. The inset does the honest test, at a **fixed** radius:
-$|\Delta T|/T$ = 1.20 → 0.196 → 0.030 % over $N_r$ = 100 → 400.</sub>
+both 1-D solvers against its closed ODE. In (c) and (c′) the first cell used to sit visibly off the
+curve; the axis repair of 2026-09-15 (§8) removed it. The inset is still the honest convergence
+test, taken at a **fixed** radius rather than at the axis cell, which is a *different physical
+point* at every resolution.</sub>
 
 ---
 
@@ -363,7 +364,7 @@ listed gate whose file has gone missing counts as a failure.
 | **T** term switches | the switched pieces vs the shipped expressions; `:homogeneous` ≡ shipped on a solve (bulk, IS2); Euler cancellation of ∇T + inertia on an ideal fluid; refusals | pieces 3e-15; bit for bit; pair cancels to 0.5 % of either term alone |
 | **A1** ideal Bjorken | $T\tau^{1/3}$ = const (conformal); the (e, n) ODE with a charge (LatticeHRGEOS) | order 2.00 (SSPRK2) / 2.99 (SSPRK3); T to 2e-9, nτ to 4e-16 |
 | **A2** viscous Bjorken | the 0+1D DNMR ODEs, each of δ_ππ, τ_ππ, λ_πΠ, δ_ΠΠ, λ_Ππ; wrong-sign referees must miss | first order (the split); extrapolated error ≤ 3e-4 |
-| **A4** viscous Gubser | the semi-analytic ODE (as 2-D G1v) | L2(T) 2.6e-4, L2(π̄) 1.5 % at Nr = 800, order 1.8 / 1.1 |
+| **A4** viscous Gubser | the semi-analytic ODE (as 2-D G1v) | L2(T) 2.8e-5, L2(π̄) 0.19 % at Nr = 800, order 2.1 / 1.0 (§8, the axis repair) |
 | **X1** diffusion mode | $\delta n = AJ_0(kr)$, $\nu^r = BJ_1(kr)$ closed ODE, **1D bulk, IS2 and 2D** on one referee, four term configurations | A to ≤ 3e-3 (1D, IS2), B to ≤ 1 %; 2D converges with dx |
 | **IO** the output format | `save_fields` → `load_fields` for all three solvers: fields bit for bit, the terms and knobs that made them, and the "plain types" promise re-checked in a process that loads only JLD2 | 21/21, 12 s |
 | IS2 drive, IS2 speeds, density frame, BDNK, M1 | as before (also in `Pkg.test()`) | — |
@@ -425,7 +426,7 @@ step and the Rusanov dissipation read the speed), so it was left for a deliberat
 | first order in time once anything dissipative is on | the operator split (1-D and 2-D); halve `CFLτ` to check. The IS2 solver is unsplit RK4 |
 | the 1-D cold-start recovery with `ConformalHQEOS` fails at α ≲ −20 | its initial guess $T_0 = E^{1/4}$ ignores $a_{SB}\hbar c^{-3}$, and the φ direction is too badly scaled when $n \sim e^{-24}$. `LatticeHRGEOS` converges at every α tried; production is unaffected. Use a charge-free EOS (`ConformalHQEOS(m_hq = 0, g_hq = 0)`) for charge-free tests |
 | **the shear sector is acausal for C_s = `tauShear_coeff` > 1/2** | conformal IS needs η/(τ_π(e+P)) = C_s ≤ 1/2, and an acausal IS theory is unstable in a moving frame. With the ∂_τu^r fix the 1-D solver shows it: viscous Gubser runs at C_s ≤ 0.6 and runs away at 0.8 (growing with resolution). The builders warn. ⚠ `run_sim_ideal_diff_visc` still defaults to C_s = 1 (production passes 0.2) |
-| the axis cell | carries an O(dr) mismatch between the solver's acceleration and $\nabla T$ (gate T4: halves with each refinement). **Quote from $r > \Delta r$, not from cell 1.** Measured on viscous Gubser (η/s = 0.02, τ = 1 → 2), cell 1 is 7.30 / 2.43 / 0.99 / 0.42 % in $T$ at $N_r$ = 100/200/400/800 — first order, and at a *moving* radius. At a **fixed** $r$ = 0.3 fm the same runs give 1.20 / 0.196 / 0.030 / 0.0053 % (order ≈ 2.5), and $\bar\pi$ at $r$ = 0.15 fm goes 6.9e-4 → 1.5e-4 → 1.5e-5 → 2.0e-6. ⛔ It is **not** the timestep and **not** the axis BC: tripling the step count moves cell 1 by < 1 % of its own error, SSPRK3 changes nothing, and disabling the $r=0$ shear-isotropy overwrite in `apply_bc!` moves $\bar\pi$ from −2.00e-3 to −1.87e-3 while making $T$ slightly worse. **The mechanism is identified** (2026-09-15): cell 1's update is $-2F_{1/2}/\Delta r + S$, so it rests on a *single* face amplified by $2/\Delta r$, against a geometric source $(P+\Pi+\pi^\phi_\phi)/r$ of the same size — the two must cancel, and they do so *exactly* on a uniform state (measured: $\max|u^r|$ = 0 to machine zero at every $N_r$), but only to truncation once the profile has curvature. And that face is the one place MUSCL is switched off (`reconstruction.jl`: no slope below `ng+2`, first order at face `ng+1`). ⛔ **Turning reconstruction on there is not a fix and was rejected**: it improves cell 2 (0.60 % → −0.04 %) and $L_2(\bar\pi)$ by 15–21 %, but makes cell 1 *worse* (2.43 % → 3.05 %) and $L_2(T)$ — the quantity every result quotes — **32–45 % worse** at both η/s. A real cure needs a proper axis treatment (a face on the axis, or an $O(\Delta r^2)$ reconstruction of the geometric source), not a flag |
+| the axis cell | **repaired 2026-09-15** (§8). It still carries an O(dr) mismatch between the solver's acceleration and $\nabla T$ (gate T4: halves with each refinement), but the first cell is no longer special-cased: $L_2(T)$ on viscous Gubser at $N_r$ = 800 is **2.78e-05** (was 2.61e-04) and the order in $T$ is **2.12** (was 1.77). `FIVO_AXIS_CELL_EXACT=0` restores the old arithmetic bit for bit |
 | the dilute edge | floors, the vacuum ramp (IS2, 2-D) and the relativistic front at the fireball edge shape the tail: quote from $T > T_{\rm fo}$ |
 | the vorticity couplings are off by default | they vanish in 1+1D; in 2+1D see `README2D.md` §7 |
 | no thermal fluctuations, no $c_M$ back-coupling in 2+1D | not implemented |
@@ -463,6 +464,35 @@ the same class of problem and is still undeclared — the examples need it and n
 ⚠ `Manifest.toml` still records `julia_version = 1.11.5` (what CI pins) while this machine runs 1.12.6, so the
 `DelimitedFiles` entry was added by hand rather than by a re-resolve; `Pkg` warns that the project hash is
 stale. `instantiate` and `test` both pass with the warning.
+
+**2026-09-15 — THE FIRST CELL WAS TREATED AS IF IT WERE ON THE AXIS, and it is not.** The first
+physical cell sits at $r = \Delta r/2$. Three places acted as though it sat at $r = 0$:
+`apply_bc!` zeroed its conserved radial momentum $S_r$, `rhs!` zeroed its $u^r$, and
+`reconstruct_muscl_prims!` left its face first order. On Gubser $u^r(\Delta r/2) = \Delta r/2$
+exactly — an **O(Δr) quantity being discarded every step**, which is precisely the first-order error
+the cell used to show. The zeroing entered in an early debugging commit and was documented nowhere.
+
+Measured on viscous Gubser (η/s = 0.02, τ = 1 → 2), against the exact time derivative at τ₀ the
+solver's RHS in cell 1 was **−18.7 %** and did not improve with resolution; it is now **+4.5e-5**,
+the same as the interior. Consequences on the gate:
+
+| | before | after |
+|---|---|---|
+| $L_2(T)$, $N_r$ = 800 | 2.614e-04 | **2.780e-05** (9.4×) |
+| $L_2(\bar\pi)$, $N_r$ = 800 | 1.500e-02 | **1.924e-03** (7.8×) |
+| observed order in $T$ | 1.77 | **2.12** |
+| cell-1 $\bar\pi$ error at $N_r$ = 400 | 1.56e-03 | **3.96e-06** (394×) |
+
+⚠ **The three act together.** Turning the reconstruction on alone makes cell 1 *worse* (−18.7 % →
+−38 %), which is why an earlier attempt at exactly that was measured and rejected.
+✅ Well-balancedness is preserved **exactly**: a uniform static fluid still gives $\max|u^r| = 0$ to
+machine zero at every resolution. The 1-D ladder is **10/10** with the repair, T4 (the axis Euler
+cancellation) and X1 (the diffusion mode through all three solvers) included. The 2+1D solver is
+untouched — it is transverse Cartesian and has no axis (`src2d/rhs2d.jl`: "no special
+first-physical-cell treatment").
+⚠ **This moves 1-D results.** On a Woods–Saxon fireball the change is small (the profile is flat at
+the axis: self-convergence 9.74e-4 → 9.41e-4 at $N_r$ = 200), but anything with structure near
+$r = 0$ moves. `FIVO_AXIS_CELL_EXACT=0` reproduces every pre-2026-09-15 number bit for bit.
 
 **2026-09-14.** `bench/benchmark.jl`, `bench/gubser_validation.jl` and `bench/ic_diagnostics.jl` had been unable to
 construct a model since `do_axis_project_nur` was added: they passed 35 positional fields where the back-compatible

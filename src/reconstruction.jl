@@ -6,14 +6,19 @@ function reconstruct_muscl_prims!(UL, UR, σ, yT, φ, y, grid; limiter=mc_limite
     ng = grid.nghost
     fill!(σ, 0.0)
 
-    @inbounds for i in (ng+2):(Ntot-ng-1)
+    # AXIS_CELL_EXACT: give the first physical cell a slope, and the axis face a second-order
+    # reconstruction, like every other cell. Only correct together with keeping S_r and u^r there
+    # (src/rhs.jl) — on its own it makes cell 1 worse.
+    _lo = AXIS_CELL_EXACT ? (ng+1) : (ng+2)
+    @inbounds for i in _lo:(Ntot-ng-1)
         σ[1,i] = limiter(yT[i]-yT[i-1], yT[i+1]-yT[i])
         σ[2,i] = limiter(φ[i]-φ[i-1],   φ[i+1]-φ[i])
         σ[3,i] = limiter(y[i]-y[i-1],   y[i+1]-y[i])
     end
 
     @inbounds for i in 1:(Ntot-1)
-        if i <= (ng+1) || i >= (Ntot-ng-1)
+        _first = AXIS_CELL_EXACT ? ng : (ng+1)
+        if i <= _first || i >= (Ntot-ng-1)
             UL[1,i] = yT[i];   UL[2,i] = φ[i];   UL[3,i] = y[i]
             UR[1,i] = yT[i+1]; UR[2,i] = φ[i+1]; UR[3,i] = y[i+1]
         else

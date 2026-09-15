@@ -94,20 +94,15 @@ function panel_c()
     rr = range(0, 4; length = 200)
     plot!(pT, rr, [Th(gubser_rho(2.0, r))/2 for r in rr]; c = :black, label = "semi-analytic")
     plot!(pp, rr, [pb(gubser_rho(2.0, r)) for r in rr]; c = :black, label = "semi-analytic")
-    # ⚠ THE FIRST CELL IS NOT A CONVERGENCE FAILURE, and reading it as one is the trap this panel
-    # is built to avoid. Cell 1 sits at r = dr/2, so it is a DIFFERENT PHYSICAL POINT at every
-    # resolution — it chases the axis as the grid refines, and no sequence of such points measures
-    # convergence. At a FIXED radius the scheme converges cleanly; measured here at r = 0.3 fm:
-    #     Nr = 100/200/400/800  →  T err 1.20 / 0.196 / 0.030 / 0.0053 %   (order ≈ 2.5)
-    #                              π̄ err 2.9e-5 / 4.7e-5 / 7.4e-6 / 1.7e-6
-    # and even at r = 0.15 fm, inside the visible overshoot, π̄ goes 6.9e-4 → 1.5e-4 → 1.5e-5 →
-    # 2.0e-6. What cell 1 carries is the documented O(dr) axis-cell error (README §7): T there
-    # converges at first order (7.30 → 2.43 → 0.99 → 0.42 %) and π̄ decays slowly.
-    # ⛔ It is NOT the timestep and NOT the axis BC — both were tested (2026-09-15): tripling the
-    # step count moves cell 1 by <1 % of its own error, SSPRK3 changes nothing, and disabling the
-    # r=0 shear-isotropy overwrite in apply_bc! moves it from -2.00e-3 to -1.87e-3 while making T
-    # slightly WORSE. It is the geometric ~1/r source evaluated in the first cell, and the cure is
-    # resolution, not a knob.
+    # ⚠ READ THE INSET, NOT THE FIRST DOT. Cell 1 sits at r = dr/2, so it is a DIFFERENT PHYSICAL
+    # POINT at every resolution — it chases the axis as the grid refines, and no sequence of such
+    # points measures convergence. The inset does the honest test at a FIXED radius.
+    # 🔑 The first cell used to sit visibly off the curve here, and that WAS a real defect, repaired
+    # 2026-09-15 (README §8, EQUATIONS1D §10b): three places treated the cell as if it were AT r = 0
+    # — apply_bc! zeroed its conserved S_r, rhs! zeroed its u^r, and the axis face ran first order —
+    # while u^r(dr/2) = dr/2 exactly on Gubser. Repairing all three took L2(T) at Nr = 800 from
+    # 2.614e-04 to 2.780e-05 and the order in T from 1.77 to 2.12. `FIVO_AXIS_CELL_EXACT=0` puts the
+    # old arithmetic back, bit for bit, if you want to see what this panel looked like before.
     conv_r = 0.3; errT = Float64[]; errP = Float64[]; Ns = (100, 200, 400)
     for (k, Nr) in enumerate(Ns)
         g = H.make_grid_1d(Nr; rmax = 10.0)

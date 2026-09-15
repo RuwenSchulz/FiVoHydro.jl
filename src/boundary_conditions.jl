@@ -15,7 +15,12 @@ function apply_bc!(U, grid, τ, model::IdealDiffViscModel)
     end
 
     i0 = ng + 1
-    @inbounds U[L.iSr, i0] = 0.0
+    # ⚠ S_r is the CONSERVED radial momentum, and cell i0 is at r = dr/2, not r = 0. Zeroing it
+    # imposes u^r = 0 half a cell off the axis and throws away an O(dr) quantity. See
+    # `AXIS_CELL_EXACT` in src/rhs.jl for the measurement and for how to restore the old behaviour.
+    @inbounds if !AXIS_CELL_EXACT
+        U[L.iSr, i0] = 0.0
+    end
 
     # Axis regularity for shear: at r=0 symmetry implies transverse isotropy,
     # i.e. π^r_r = π^φ_φ. With tracelessness this gives 2π^r_r + π^η_η = 0.

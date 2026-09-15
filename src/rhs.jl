@@ -148,8 +148,10 @@ function rhs!(dU, U, grid, τ, model::IdealDiffViscModel, work::Work1D;
     end
 
     i0 = ng + 1
-    work.y[i0]  = 0.0
-    work.vC[i0] = 0.0
+    if !AXIS_CELL_EXACT
+        work.y[i0]  = 0.0
+        work.vC[i0] = 0.0
+    end
 
     reconstruct_muscl_prims!(work.ULp, work.URp, work.σp, work.yT, work.phi, work.y, grid)
 

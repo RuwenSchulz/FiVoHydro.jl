@@ -390,48 +390,86 @@ which is why it is unconditionally stable where an explicit scheme on the same m
 
 ---
 
-## 10b. The axis cell, and one rejected repair (2026-09-15)
+## 10b. The axis cell — repaired 2026-09-15
 
-The first physical cell is the least accurate cell in the domain, and this section records *why*, so
-the diagnosis is not repeated.
+The first physical cell used to be the least accurate cell in the domain. It no longer is. This
+section records the defect, the diagnosis, and the dead ends, because the dead ends were the
+expensive part.
 
-**How cell 1 differs.** Every other cell updates as
-$\dot U_i = -(r_{i+1/2}F_{i+1/2} - r_{i-1/2}F_{i-1/2})/(r_i\Delta r) + S_i$. At the axis $r_{-}=0$,
-so the same expression collapses to $\dot U_1 = -2F_{1/2}/\Delta r + S_1$ — algebraically **exact**
-(verified), but it leaves cell 1 resting on a *single* face, amplified by $2/\Delta r$, with no
-second face to cancel against.
+### The defect
 
-**What has to cancel.** The radial momentum source carries
-$S_{S_r} \supset (P + \Pi + \pi^\phi_\phi)/r$ (`fluxes.jl:161`), which in cell 1 is $\sim 2P/\Delta r$
-— the same size as the flux term, opposite sign. The scheme is **well balanced**: on a uniform static
-fluid the two cancel to machine zero ($\max|u^r| = 0$ exactly, at $N_r$ = 100/200/400/800). With
-curvature they cancel only to truncation, and the residual is what cell 1 shows.
+Cell 1 sits at $r = \Delta r/2$. **Three places treated it as if it sat at $r = 0$:**
 
-**Three causes ruled out by measurement**, on viscous Gubser (η/s = 0.02, τ = 1 → 2):
+| | what it did |
+|---|---|
+| `boundary_conditions.jl` | zeroed $S_r$, the *conserved radial momentum*, every call |
+| `rhs.jl` | zeroed `work.y[i0]` and `work.vC[i0]`, i.e. $u^r$ and $v$ |
+| `reconstruction.jl` | computed no slope below `ng+2`, so the axis face ran first order |
+
+$u^r = 0$ is right **at** the axis. Half a cell off it, Gubser has $u^r(\Delta r/2) = \Delta r/2$
+*exactly* — so the code discarded an $O(\Delta r)$ quantity on every step, which is precisely the
+first-order convergence cell 1 used to show. The zeroing entered in an early debugging commit
+(`ef376b8`) and was documented nowhere.
+
+### How it was found
+
+Not by staring at profiles — by comparing the **solver's RHS at $\tau_0$** against the exact time
+derivative of the analytic solution. That separates a bad initial state from a bad update:
+
+| cell | $r$ | before | after |
+|---|---|---|---|
+| 1 | 0.0125 | **−18.7 %** | +4.5e-5 |
+| 2 | 0.0375 | +8.5 % | +5.2e-5 |
+| 3 | 0.0625 | −1.7 % | +4.3e-5 |
+| 4 | 0.0875 | +4.6e-5 | +4.6e-5 |
+
+An alternating-sign, three-cell footprint that **did not shrink with resolution** (−20.5 % at
+$N_r$ = 200, −18.7 % at 400) is a stencil defect, not truncation.
+
+### The effect of repairing it
+
+| | before | after |
+|---|---|---|
+| $L_2(T)$, $N_r$ = 800, η/s = 0.02 | 2.614e-04 | **2.780e-05** (9.4×) |
+| $L_2(\bar\pi)$, same | 1.500e-02 | **1.924e-03** (7.8×) |
+| observed order in $T$ | 1.77 | **2.12** |
+| cell-1 $T$ error, $N_r$ = 100/200/400 | 7.30 / 2.43 / 0.99 % | **0.77 / 0.22 / 0.06 %** |
+| cell-1 $\bar\pi$ error, $N_r$ = 400 | 1.56e-03 | **3.96e-06** (394×) |
+
+$T$ recovers its **design order**. Cell 1's own order goes 1.24 → 1.86, and $\bar\pi$'s there stops
+stagnating and converges at ≈ 2.
+
+⚠ **The three changes act together.** Enabling the reconstruction *alone* makes cell 1 **worse**
+(−18.7 % → −38 %), because a second-order face flux then feeds a cell whose momentum is still being
+zeroed. An earlier pass measured exactly that combination, found it traded $T$ for $\bar\pi$, and
+rejected it — correctly, for that combination.
+
+### Four dead ends, each killed by measurement
 
 | candidate | test | verdict |
 |---|---|---|
-| the timestep / integrator | CFL 0.15 → 0.05, CFLτ 0.005 → 0.002 (3× the steps); SSPRK3 | **no** — cell 1 moves by < 1 % of its own error. The error is purely spatial |
-| the $r=0$ shear-isotropy BC (`apply_bc!` sets $\pi^r_r = -\pi^\eta_\eta/2$ in cell 1, exact only *at* $r=0$) | disable it | **no** — $\bar\pi$ moves −2.00e-3 → −1.87e-3 and $T$ gets slightly *worse* |
-| the initial condition (point value vs $r$-weighted cell average) | integrate the exact profile over cell 1 | **no** — the difference is 2.3e-6 at $N_r$ = 100, four orders too small |
-| θ at the axis | compare to the analytic $\theta$ | **no** — second order, and cell 1 is *better* than cell 2 (3.0e-5 vs 1.5e-4 at $N_r$ = 100) |
+| the timestep / integrator | 3× the steps (CFL 0.15 → 0.05, CFLτ 0.005 → 0.002); SSPRK3 | **no** — cell 1 moves < 1 % of its own error. Purely spatial |
+| the $r=0$ shear-isotropy BC ($\pi^r_r = -\pi^\eta_\eta/2$ in cell 1) | disable it | **no** — $\bar\pi$ −2.00e-3 → −1.87e-3, $T$ slightly *worse* |
+| the IC (point value vs $r$-weighted cell average) | integrate the exact profile over cell 1 | **no** — 2.3e-6 at $N_r$ = 100, four orders too small |
+| $\theta$ at the axis | compare to analytic $\theta$ | **no** — second order, and cell 1 *better* than cell 2 |
 
-**The rejected repair.** The axis face is also the one place MUSCL is off: `reconstruction.jl`
-computes slopes only from `ng+2`, and face `ng+1` falls in the first-order branch. Enabling both
-there does help *some* quantities and was still **rejected**:
+Two further repairs were derived, implemented and found **null** on the real profile: volume
+averaging the geometric source over cell 1 (exact on a model $P = P_0 + cr^2$, but the correction is
+1e-5 relative on Gubser, which is flat at the axis), and evaluating both sides of the HLLE flux at
+the *face* radius instead of the two cell centres.
 
-| | shipped | axis reconstruction |
-|---|---|---|
-| cell 2, rel $T$ err | 0.60 % | **−0.04 %** |
-| cell 1, rel $T$ err | **2.43 %** | 3.05 % |
-| $L_2(T)$, $N_r$ = 800, η/s = 0.02 | **2.614e-04** | 3.786e-04 (**+45 %**) |
-| $L_2(\bar\pi)$, same | 1.500e-02 | **1.179e-02** (−21 %) |
-| order $T$ | **1.77** | 1.62 |
+### What is preserved
 
-It trades a 15–21 % gain in $\bar\pi$ for a **32–45 % loss in $T$** (both η/s = 0.005 and 0.02), and
-$T$ is the field every result in this repository quotes. A genuine cure is a proper axis treatment —
-a grid with a *face* on the axis, or an $O(\Delta r^2)$ reconstruction of the geometric source
-against the flux — not a switch. Until then: **quote from $r > \Delta r$**.
+- **Well-balancedness, exactly.** A uniform static fluid still gives $\max|u^r| = 0$ to machine zero
+  at $N_r$ = 100/200/400/800. The flux/source cancellation at the axis was never the problem.
+- **The 1-D ladder, 10/10**, T4 (the axis Euler cancellation) and X1 (the diffusion mode judged
+  across all three solvers) included.
+- **The 2+1D solver**, untouched: transverse Cartesian, no axis at all
+  (`src2d/rhs2d.jl`: "no special first-physical-cell treatment").
+- **Every pre-2026-09-15 number**, via `FIVO_AXIS_CELL_EXACT=0`, bit for bit.
+
+⚠ **This moves 1-D results.** A Woods–Saxon fireball barely notices (it is flat at the axis:
+self-convergence 9.74e-4 → 9.41e-4 at $N_r$ = 200), but anything with structure near $r = 0$ moves.
 
 ---
 
