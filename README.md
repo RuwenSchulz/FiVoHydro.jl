@@ -14,8 +14,14 @@ Three solvers share one term interface, one set of analytic referees and one out
 | **1+1D charm IS2** | `main2IS2.jl` → `hydro_current_IS2` | the charm $(\alpha, \nu^r, \pi_Q^r, \pi_Q^\perp, \Pi_Q)$ on a frozen background | radial Milne |
 | **2+1D** | `main2D.jl` → `hydro2d` | medium + charge + the charm second moment | transverse Cartesian Milne $(\tau, x, y)$ |
 
-Scheme: HLLE + MUSCL (MC limiter) in primitive variables, SSPRK2/3, operator-split relaxation of the
-dissipative fields, MOOD fallback. The IS2 solver is a quasi-linear 5×5 system with RK4.
+**Two schemes, for two kinds of equation.** The bulk solvers (1+1D and 2+1D) evolve conservation
+laws, so they are **conservative finite volume**: HLLE fluxes with MUSCL reconstruction (MC limiter)
+in primitive variables, SSPRK2/3 in time, operator-split relaxation of the dissipative fields, and a
+MOOD fallback. The charm IS2 solver evolves a fugacity and four relaxation equations, which have no
+conservative form, so finite volume does not apply to them: it is written in the **quasi-linear
+form** $A_t\,\partial_\tau U + A_x\,\partial_r U = S$ and advanced with RK4, with the characteristic
+speeds taken from the eigenvalues of $A_t^{-1}A_x$. Its one genuinely conserved quantity, the charm
+charge, *is* updated by a conservative face-flux difference inside that same solver.
 
 ![a real Pb+Pb event](examples2d/figures/ex10_showcase_N400.png)
 
@@ -30,9 +36,9 @@ $\pi_Q$ and *nothing else*, so the claim is the bottom-right panel, not the fire
 
 ## Does it work? — the short version
 
-Every number below is produced by a script; none is transcribed by hand. The two ladders were last
-re-run on **2026-09-15**, the examples on 2026-09-14. The cross-code work is in the private research
-repository this package is developed in (see the note under "Cross-checks").
+Every number below is printed by a script in this repository, and none is transcribed by hand —
+re-run the command beside it and you get the number back. The two validation ladders were last run
+on **2026-09-15**, the worked examples on 2026-09-14.
 
 | | | |
 |---|---|---|
@@ -155,6 +161,21 @@ used only as a Riemann-problem benchmark. "2-D FiVo" means `main2D.jl` here.
 > `examples2d/`.
 
 ---
+
+## Licence and citation
+
+© 2026 Ruwen Schulz. Released under the **Apache License 2.0** ([`LICENSE`](LICENSE)).
+
+Copyright stays with the author; the licence grants use, it does not transfer ownership. Apache-2.0
+lets you use, modify and redistribute the code, including commercially, on three conditions: keep
+the licence and copyright notice, state what you changed, and accept that it comes with no trademark
+rights and no warranty. It also carries an **express patent grant**, which MIT and BSD do not.
+
+**If you use FiVo in work that is published, please cite it.** The licence does not require this;
+it is the normal scientific courtesy, and [`CITATION.cff`](CITATION.cff) makes it one click — GitHub
+renders a *"Cite this repository"* button from it, and it exports BibTeX and APA. Please also say
+which version you ran (a commit hash is ideal): the validation numbers on this page are tied to a
+commit, and the solver has had corrections that move results (§8).
 
 ## 1. Which solver
 

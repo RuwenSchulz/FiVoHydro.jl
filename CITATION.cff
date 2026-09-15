@@ -9,12 +9,15 @@ authors:
 repository-code: "https://github.com/RuwenSchulz/FiVoHydro.jl"
 license: Apache-2.0
 version: "0.1.0"
+date-released: "2026-09-15"
 abstract: >-
   FiVoHydro.jl (FiVo) solves boost-invariant relativistic viscous hydrodynamics in
   Milne coordinates together with a diffusing heavy-quark (charm) charge, in radial
-  1+1D and transverse 2+1D. The scheme is conservative finite volume: HLLE with MUSCL
-  reconstruction in primitive variables, SSPRK2/3 time stepping, operator-split
-  relaxation of the dissipative fields, and a MOOD fallback. It ships a validation
+  1+1D and transverse 2+1D. The bulk solvers are conservative finite volume: HLLE with
+  MUSCL reconstruction in primitive variables, SSPRK2/3 time stepping, operator-split
+  relaxation of the dissipative fields, and a MOOD fallback. The charm second-moment
+  solver, whose equations have no conservative form, is integrated in quasi-linear
+  form with RK4. It ships a validation
   ladder in which every gate is judged by a referee that is not the code under test —
   a closed form, a semi-analytic ODE, or a second, independently written solver.
 keywords:
