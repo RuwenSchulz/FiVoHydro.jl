@@ -8,8 +8,16 @@ authors:
     email: ruwen-schulz@hotmail.de
 repository-code: "https://github.com/RuwenSchulz/FiVoHydro.jl"
 license: Apache-2.0
+doi: "10.5281/zenodo.22790954"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.22790954"
+    description: "The concept DOI: always resolves to the latest version."
+  - type: doi
+    value: "10.5281/zenodo.22791452"
+    description: "The DOI of this exact version."
 version: "0.1.0"
-date-released: "2026-09-15"
+date-released: "2026-09-16"
 abstract: >-
   FiVoHydro.jl (FiVo) solves boost-invariant relativistic viscous hydrodynamics in
   Milne coordinates together with a diffusing heavy-quark (charm) charge, in radial

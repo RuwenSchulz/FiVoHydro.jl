@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/RuwenSchulz/FiVoHydro.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/RuwenSchulz/FiVoHydro.jl/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22790954.svg)](https://doi.org/10.5281/zenodo.22790954)
 
 **A finite-volume solver for boost-invariant relativistic viscous hydrodynamics with a diffusing
 heavy-quark (charm) charge**, written for heavy-quark transport in heavy-ion collisions.
@@ -186,6 +187,13 @@ it is the normal scientific courtesy, and [`CITATION.cff`](CITATION.cff) makes i
 renders a *"Cite this repository"* button from it, and it exports BibTeX and APA. Please also say
 which version you ran (a commit hash is ideal): the validation numbers on this page are tied to a
 commit, and the solver has had corrections that move results (§8).
+
+Each release is archived on Zenodo and carries a DOI:
+
+| | DOI |
+|---|---|
+| **cite this one** — always resolves to the newest version | [10.5281/zenodo.22790954](https://doi.org/10.5281/zenodo.22790954) |
+| v0.1.0, this exact version | [10.5281/zenodo.22791452](https://doi.org/10.5281/zenodo.22791452) |
 
 ## 1. Which solver
 
