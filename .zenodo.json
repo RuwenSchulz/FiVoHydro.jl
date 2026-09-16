@@ -1,0 +1,23 @@
+{
+  "title": "FiVoHydro.jl — a finite-volume solver for boost-invariant relativistic viscous hydrodynamics with a diffusing heavy-quark charge",
+  "description": "<p>FiVoHydro.jl (FiVo) solves boost-invariant relativistic viscous hydrodynamics in Milne coordinates together with a diffusing heavy-quark (charm) charge, in radial 1+1D and transverse 2+1D.</p><p>The bulk solvers are conservative finite volume: HLLE with MUSCL reconstruction in primitive variables, SSPRK2/3 time stepping, operator-split relaxation of the dissipative fields, and a MOOD fallback. The charm second-moment solver, whose equations have no conservative form, is integrated in quasi-linear form with RK4.</p><p>It ships a <strong>validation ladder in which every gate is judged by a referee that is not the code under test</strong> &mdash; a closed form, a semi-analytic ODE, or a second, independently written solver. Cross-code gates against an independent Fluidum implementation agree on the 1+1D and 2+1D second moments to the level of round-off.</p><p>Several dissipative formulations are available for comparison: Israel&ndash;Stewart (M1 and M2 closures), BDNK in both a plain and a causality-constrained variant, and a density-frame solver.</p>",
+  "upload_type": "software",
+  "license": "Apache-2.0",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "Schulz, Ruwen"
+    }
+  ],
+  "keywords": [
+    "relativistic hydrodynamics",
+    "heavy-ion collisions",
+    "heavy-quark diffusion",
+    "Israel-Stewart",
+    "BDNK",
+    "finite volume",
+    "Milne coordinates",
+    "quark-gluon plasma",
+    "Julia"
+  ]
+}
