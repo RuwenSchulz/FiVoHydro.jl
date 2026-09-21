@@ -12,7 +12,7 @@ There are three solvers. They share one term interface, one test suite and one o
 | solver | driver → module | evolves | geometry |
 |---|---|---|---|
 | **1+1D bulk** | `main.jl` → `hydro` | the medium $(T, u^r, \Pi, \pi_\phi, \pi_\eta)$ + a diffusing charge $(n, \nu^r)$ | radial Milne $(\tau, r)$ |
-| **1+1D charm IS2** | `main2IS2.jl` → `hydro_current_IS2` | the charm $(\alpha, \nu^r, \pi_Q^r, \pi_Q^\perp, \Pi_Q)$ on a frozen background | radial Milne |
+| **1+1D charm IS2** | `main2IS2.jl` → `hydro_current_IS2` | the charm $(\alpha, \nu^r, \pi_Q^r, \pi_Q^\perp, \Pi_Q)$ on a given background | radial Milne |
 | **2+1D** | `main2D.jl` → `hydro2d` | medium + charge + the charm second moment | transverse Cartesian Milne $(\tau, x, y)$ |
 
 The bulk solvers (1+1D and 2+1D) are conservative finite volume: HLLE fluxes, MUSCL reconstruction
@@ -179,7 +179,7 @@ f = H.fields_1d(g, U, m; τ = res.τ, work = res.work)                  # r, T, 
 H.save_fields("run.jld2", f; model = m)                               # §4
 ```
 
-**1+1D charm on a frozen background.** Give either a JLD2 bundle or functions of (τ, r):
+**1+1D charm on a given background.** Give either a JLD2 bundle or functions of (τ, r):
 
 ```julia
 include("main2IS2.jl"); using .hydro_current_IS2; const HI = hydro_current_IS2
@@ -346,7 +346,7 @@ drivers read many; `ENV_FLAGS.md` lists them.
 | file | module | physics |
 |---|---|---|
 | `main.jl` | `hydro` | bulk fluid + charge: `run_sim_ideal_diff_visc(; kwargs…)` (library) / `main()` (CLI, ENV-driven). Includes all of `src/` |
-| `main2IS2.jl` | `hydro_current_IS2` | charm current, Israel–Stewart 5-field `(α, ν^r, π_Q^{rr}, π_Q^⊥, Π_Q)` on a frozen bulk: `run_static_IS2_test(; background_file, …)` |
+| `main2IS2.jl` | `hydro_current_IS2` | charm current, Israel–Stewart 5-field `(α, ν^r, π_Q^{rr}, π_Q^⊥, Π_Q)` on a given background: `run_static_IS2_test(; background_file, …)` |
 | `main2.jl` | `hydro_current` | charm current, first-order (ν^r relaxes to NS): `solve_current_only` |
 | `main2M1.jl` | `hydro_current_M1` | charm current as a 3-field maximum-entropy (M1) moment system, no transport coefficients, no regulators: `run_static_M1_test`, `solve_M1` |
 | `main2M2.jl` | `hydro_current_M2` | four-field MaxEnt M2 system (parallel to M1): `run_static_M2_test` |
