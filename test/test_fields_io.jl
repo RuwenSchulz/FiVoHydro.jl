@@ -34,7 +34,7 @@ const H2 = hydro2d
 const TMPDIR = mktempdir()
 
 # A charge-free conformal EOS keeps the cold-start recovery out of the α ≲ −20 corner
-# (README.md, known limitations); this gate is about the file, not about the physics.
+# (docs/NOTES.md, known limitations); this gate is about the file, not about the physics.
 eos1d() = H.ConformalHQEOS(m_hq = 1.5, g_hq = 6.0)
 
 # ---------------------------------------------------------------- 1+1D bulk

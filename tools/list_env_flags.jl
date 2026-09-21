@@ -1,7 +1,7 @@
 #!/usr/bin/env julia
 # tools/list_env_flags.jl — enumerate every ENV variable the FiVoHydro sources read, with the
 # default the code falls back to and the file:line of the read. Output is a Markdown table
-# (pasted into README.md §"Environment flags") so the documented list cannot drift from the code.
+# (written to ENV_FLAGS.md) so the documented list cannot drift from the code.
 #
 #   julia Julia/FiVoHydro.jl/tools/list_env_flags.jl            # Markdown table to stdout
 #   julia Julia/FiVoHydro.jl/tools/list_env_flags.jl --count    # just the number of distinct flags

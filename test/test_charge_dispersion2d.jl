@@ -341,7 +341,7 @@ const C_NUM = 0.20
     # the solver but D_sT, m and T.
     #
     # It comes out a factor g_hq = 6 SHORT, at every temperature. That is not a
-    # new number: README.md ("tau_n is bare") records `39da649` (2026-07-16,
+    # new number: docs/NOTES.md ("tau_n is bare") records `39da649` (2026-07-16,
     # `main2.jl::diff_tauN_bg`) and `c4fe4a0` (`main2IS2.jl`) removing "a spurious
     # 1/g_hq that made tau_n 6x too small and the diffusion signal speed
     # superluminal above T = 0.48 GeV". `main2.jl:233` carries the fix as the

@@ -289,7 +289,7 @@ and τ²π^{ηη}; they sum to zero). `ok` flags cells whose primitive recovery 
 Pass the run's `work` (`res.work`) to warm-start the recovery from the solver's own
 primitives — then the fields are exactly what the solver sees. Without it the
 recovery starts cold, which can fail for extreme states (1-D recovery with
-`ConformalHQEOS` at α ≲ −20; README.md, known limitations).
+`ConformalHQEOS` at α ≲ −20; docs/NOTES.md, known limitations).
 """
 function fields_1d(g::Grid1D, U::AbstractMatrix, model::IdealDiffViscModel; τ::Float64,
                    work = nothing)

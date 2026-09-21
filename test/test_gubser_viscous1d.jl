@@ -32,7 +32,7 @@ const RMAX = 10.0
 const RCMP = 3.0
 # A charge-free conformal fluid, which is what the referee describes. (G1v in 2-D
 # uses ConformalHQEOS at α = −20 instead; the 1-D cold-start recovery does not
-# converge there — README.md, known limitations — and a charge-free EOS is the
+# converge there — docs/NOTES.md, known limitations — and a charge-free EOS is the
 # cleaner statement of the problem anyway.)
 const EOS  = H.ConformalHQEOS(m_hq = 0.0, g_hq = 0.0)
 const INVFMGEV = 1/HBARC_REF

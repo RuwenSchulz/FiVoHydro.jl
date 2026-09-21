@@ -1,39 +1,31 @@
 # FiVo 2+1D — `main2D.jl` / module `hydro2d`
 
-A finite-volume solver for **boost-invariant, transversely Cartesian** relativistic viscous
+A finite-volume solver for boost-invariant, transversely Cartesian relativistic viscous
 hydrodynamics in Milne coordinates $(\tau, x, y, \eta_s)$. It carries the medium, the
-Israel–Stewart shear and bulk stresses, and a diffusing heavy-quark (charm) charge. Optionally it
-also carries the **thermodynamically consistent** charm first moment and a passive charm second
-moment. It is the 2-D sibling of the 1+1D radial solver in `main.jl` and shares six
-dimension-agnostic files with it, plus the common I/O layer `src/fields_io.jl`
-
-> ⚠ Paths beginning `Julia/Projects/…` or `Tex/…` name the **private research repository** this
-> package is developed in. They are cited for provenance — so a number can be traced to the script
-> that produced it — and are not links you can follow from a clone of this package.
-
-(`README.md`, "How the solvers share code").
+Israel–Stewart shear and bulk stresses and a diffusing heavy-quark (charm) charge. Optionally it
+also carries the thermodynamically consistent charm first moment and a passive charm second moment.
+It is the 2-D version of the 1+1D radial solver in `main.jl` and shares six dimension-independent
+files with it, plus the I/O layer `src/fields_io.jl` (`README.md`, "How the solvers share code").
 
 | document | what it is for |
 |---|---|
-| **this file** | how to use the solver: quickstart, every knob, the examples, the validation, the cost |
-| [`EQUATIONS2D.md`](EQUATIONS2D.md) | every equation, term by term — formula, code, switch, gate — and the corrections log |
-| [`examples2d/`](examples2d/README.md) | ten runnable examples, each seconds to minutes, each with a figure; four also write animations |
-| [`TWOD_PROGRAM.md`](TWOD_PROGRAM.md) | the chronological build log: every derivation, measurement and retraction |
+| **this file** | how to use the solver: quickstart, knobs, examples, tests, cost |
+| [`EQUATIONS2D.md`](EQUATIONS2D.md) | every equation, term by term (formula, code, switch, gate) and the corrections log |
+| [`examples2d/`](examples2d/README.md) | eleven runnable examples, seconds to minutes each, each with a figure; four also write animations |
+| [`TWOD_PROGRAM.md`](TWOD_PROGRAM.md) | the build log |
 
-**Status (2026-09-15).** The ladder is 22 gates, **22/22 on 2026-09-15** (≈29 min): two analytic solutions (Bjorken,
-Gubser), sound propagation, reproduction of the 1-D production solver, closed-form referees for the
-charm sector, and cross-code agreement with Fluidum. Not on any manuscript's production path; used
-by `Projects/FiVoFluidumComparison` and one O+O animation. Read §7 before quoting a number from
-the dilute edge or from a charm closure.
+**Status (2026-09-15).** 22 gates, **22/22 on 2026-09-15** (≈29 min): two analytic solutions
+(Bjorken, Gubser), sound propagation, reproduction of the 1-D solver, closed-form tests for the charm
+sector, and cross-checks with Fluidum.
 
 ---
 
 ## 1. Quickstart
 
-From the repository root, in a REPL started with `julia -t auto --project=Julia/FiVoHydro.jl`:
+In a REPL started with `julia -t auto --project=.`:
 
 ```julia
-include("Julia/FiVoHydro.jl/main2D.jl"); using .hydro2d; const H = hydro2d
+include("main2D.jl"); using .hydro2d; const H = hydro2d
 
 g = H.make_grid2d(96, 96; xmax = 12.0, ymax = 12.0)       # ±12 fm, 96² cells, 3 ghost layers
 m = H.build_model_2d(; eos = H.LatticeHRGEOS(),
@@ -60,22 +52,20 @@ println("T_max = ", maximum(f.T), " GeV,  max|u| = ", res.maxu, ",  charge drift
 About 8 s including compilation. `f` has `x, y, T, mu, alpha, n, e, P, ux, uy` and every dissipative
 field the model carries (`nux, nuy, Pi, pixx, pixy, piyy, pieta, pQxx, …, PiQ`), in physical units.
 
-**Three things that bite** (each has cost a debugging session here):
+Two things to watch:
 
-1. `finalize_ic!` is not optional after `set_cell!`: a vacuum tail starts below the energy floor.
-   `initialize_uniform!`, `initialize_from_radial!` and `initialize_from_grid_csv!` call it for you.
-2. `res.ok` means "every step completed", not "the result is physical". Read `res.maxu`, `res.dQ` and
-   `res.minPtot` as well, and `|π|/P`, `|ν|/n` over cells **above** freeze-out.
-3. Julia soft scope: an accumulator updated inside a *top-level* `for` is a new local every
-   iteration. Put loops in functions (`CLAUDE.md`, trap 1).
+1. Call `finalize_ic!` after `set_cell!`, otherwise a vacuum tail starts below the energy floor.
+   `initialize_uniform!`, `initialize_from_radial!` and `initialize_from_grid_csv!` do it for you.
+2. `res.ok` means every step completed, not that the result is physical. Also check `res.maxu`,
+   `res.dQ`, `res.minPtot`, and `|π|/P`, `|ν|/n` over cells above freeze-out.
 
 ---
 
-## 2. The model — every knob
+## 2. The model
 
-`build_model_2d(; kwargs...)` builds an `IdealDiffVisc2DModel` with a state layout matching the
-enabled sectors (an absent sector's fields are not in `U` at all). **Defaults are the bare ideal
-scheme**; every sector and every regulator is opt-in. Any field below can be passed as a keyword.
+`build_model_2d(; kwargs...)` builds an `IdealDiffVisc2DModel` whose state layout matches the enabled
+sectors (a disabled sector's fields are not in `U` at all). The defaults are the bare ideal scheme;
+every sector and every regulator is opt-in. Any field below can be passed as a keyword.
 
 **Sectors and coefficients**
 
@@ -84,12 +74,12 @@ scheme**; every sector and every regulator is opt-in. Any field below can be pas
 | `eos` | `LatticeHRGEOS()` | equation of state (`ConformalHQEOS()` for the conformal tests) |
 | `with_charge` | `true` | carry the conserved charge $\tilde D = \tau J^\tau$ at all |
 | `enable_shear`, `eta_over_s`, `tauShear_coeff` | `false`, 0.1, 0.2 | $\eta = (\eta/s)s$, $\tau_\pi = \eta/(C_s T s)$ |
-| `deltaShear_factor` | **4/3** | $\delta_{\pi\pi}/\tau_\pi$. ⚠ `build_model_1d` agrees (4/3 since 2026-09-11), but the legacy 1-D entry `run_sim_ideal_diff_visc` still defaults to **0** — production passes 4/3 explicitly. Fluidum has no such term |
+| `deltaShear_factor` | **4/3** | $\delta_{\pi\pi}/\tau_\pi$. `build_model_1d` also uses 4/3; the legacy `run_sim_ideal_diff_visc` defaults to 0. Fluidum has no such term |
 | `enable_bulk`, `zeta_over_s`, `tauPi_coeff` | `false`, 0.1, 15.0 | peaked $\zeta/s$ at $T = 0.175$ GeV, $\tau_\Pi$ from $C_\zeta$ |
-| `enable_diff`, `kappa_coeff` | `false`, **0.0** | charge diffusion with $D_sT$ = `kappa_coeff`. ⚠ set it: 0 means no diffusion at all |
+| `enable_diff`, `kappa_coeff` | `false`, **0.0** | charge diffusion with $D_sT$ = `kappa_coeff`. Set it; 0 means no diffusion |
 | `consistent_fm` | `false` | the full-∇P first moment (four extra terms, EQUATIONS2D §4) |
 | `consistent_m2` | `false` | the passive charm second moment $(\pi_Q^{ij}, \Pi_Q)$ (EQUATIONS2D §5) |
-| `terms` | `:default` | per-term switches: a preset (`:homogeneous`, `:full`, `:none`), `without(:acceleration, …)`, or a NamedTuple such as `(fm_inertial = false,)` — §3 |
+| `terms` | `:default` | per-term switches: a preset (`:homogeneous`, `:full`, `:none`), `without(:acceleration, …)`, or a NamedTuple such as `(fm_inertial = false,)` (§3) |
 | `transport_mass` | 0.0 (= EoS mass) | charm mass in the second moment's Bessel ratios and $\tau_M$ |
 | `tauN_coeff`, `deltaN_factor` | 1.0, 0.0 | $\tau_n$ multiplier (refused with `consistent_fm`), $\delta_{nn}/\tau_n$ |
 
@@ -99,10 +89,10 @@ scheme**; every sector and every regulator is opt-in. Any field below can be pas
 |---|---|---|
 | `shear_projected_deriv`, `diff_projected_deriv` | `true` | the projector correction on $D\pi$ and $D\nu$ |
 | `relax_advect_pi`, `relax_advect_Pi`, `relax_advect_nu`, `relax_advect_m2` | `true` | transverse advection of the dissipative fields, upwinded inside the relaxation |
-| `advect_pi`, `advect_Pi`, `advect_nu` | `false` | the alternative: advect them as passive scalars in the flux. Unstable for the charge sector on the production IC — leave off |
+| `advect_pi`, `advect_Pi`, `advect_nu` | `false` | advect them as passive scalars in the flux instead. Unstable for the charge sector on the production IC; leave off |
 | `shear_constraint` | `:project` | restore tracelessness each step (`:monitor` only measures it) |
 
-**Regulators — they act where they bind; see EQUATIONS2D §8**
+**Regulators** (EQUATIONS2D §8)
 
 | keyword | default | meaning |
 |---|---|---|
@@ -114,8 +104,8 @@ scheme**; every sector and every regulator is opt-in. Any field below can be pas
 **Second-order medium couplings** (DNMR; all default 0, EQUATIONS2D §2–3, gate Gd): `taupi_pi_factor`
 (τ_ππ/τ_π), `lambda_pi_Pi_factor` (λ_πΠ/τ_π), `deltaPi_factor` (δ_ΠΠ/τ_Π), `lambda_Pi_pi_factor` (λ_Ππ/τ_Π).
 
-Refused at non-default values, because nothing in `src2d/` reads them (they exist for signature
-parity with the 1-D model): `diffusion_drive`, `diff_dt_coeff`, `shear_dt_coeff`, `bulk_dt_coeff`.
+`diffusion_drive`, `diff_dt_coeff`, `shear_dt_coeff` and `bulk_dt_coeff` exist only for signature
+parity with the 1-D model. Nothing in `src2d/` reads them, so non-default values are refused.
 
 **The driver**
 
@@ -128,25 +118,25 @@ res = run_sim_2d!(U, g, m; τ0 = 0.4, τfinal = 13.0, CFL = 0.2, CFLτ = 0.05,
 # res: ok, τ, nsteps, nprimfail, nvacuum, max_shear_res, work, maxu, dQ, Q0, Q1, minPtot
 ```
 
-To continue a run, pass `work = res.work, reset_history = false`: the $\partial_\tau$ history lives in
-the work array, and a restart without it drops the $\partial_\tau$ pieces of the NS targets for one step.
+To continue a run, pass `work = res.work, reset_history = false`. The $\partial_\tau$ history lives in
+the work array; without it the restart drops the $\partial_\tau$ pieces of the NS targets for one step.
 
 **Initial conditions**
 
 | | |
 |---|---|
 | `initialize_uniform!(U, g, m, τ0; T0, alpha0)` | a transversely uniform state (Bjorken) |
-| `initialize_from_radial!(U, g, m, τ0, Tof, αof)` | from radial profiles `T(r)`, `α(r)` — the repo's production ICs are radial |
-| `initialize_from_grid_csv!(U, g, m, τ0, csv)` | from an `x,y,T0,alpha0` grid, as `Projects/ALICE_IC_Creation/BuildIC2D.jl` writes (real ε₂, ε₃) |
+| `initialize_from_radial!(U, g, m, τ0, Tof, αof)` | from radial profiles `T(r)`, `α(r)` |
+| `initialize_from_grid_csv!(U, g, m, τ0, csv)` | from an `x,y,T0,alpha0` grid (real ε₂, ε₃) |
 | `set_cell!(U, i, T, α, ux, uy, τ, m; Pi, pixx, pixy, piyy, nux, nuy)` then `finalize_ic!` | anything else |
 
 ---
 
 ## 3. Switching individual terms off
 
-Whole sectors switch with the `enable_*` / `consistent_*` flags, and a few medium terms with the knobs
-above. Every other term has its own switch in the shared register `Terms` (`src/terms.jl`, the same one
-the 1+1D solvers use; `Terms2D` is its alias here). The interface is one screen, in `README.md` §3:
+Whole sectors switch with the `enable_*` / `consistent_*` flags, and a few medium terms with the
+knobs above. Every other term has its own switch in the shared register `Terms` (`src/terms.jl`, the
+same one the 1+1D solvers use; `Terms2D` is its alias here). The interface is in `README.md` §3:
 
 ```julia
 m = H.build_model_2d(; enable_diff = true, kappa_coeff = 0.1163,
@@ -158,7 +148,7 @@ H.show_equations(m)
 ```
 
 `show_equations` prints every equation with each term marked `[x]` or `[ ]` and the knob that
-controls it; `show_terms()` prints the register with each term's ingredients. The switches:
+controls it. `show_terms()` prints the register with each term's ingredients. The switches:
 
 | first moment | second moment |
 |---|---|
@@ -170,24 +160,23 @@ controls it; `show_terms()` prints the register with each term's ingredients. Th
 | `fm_dlnh` — $(D_s/T)h'DT\,\nu^i$ | `m2_projector` — the Δ-projector on $D\pi_Q$ |
 | **medium:** `shear_vorticity` — $2\tau_\pi\pi^{\lambda\langle i}\omega_\lambda{}^{j\rangle}$, **off by default** | `m2_accel_nu`, `m2_nu_gradTh` — class (iv) |
 
-A switch NAMED in a sector that is off is **refused**, not ignored, and so is a misspelled name; a change that
-comes from a preset or an ingredient in an off sector is inert and reset. Defaults are the equations as they
-stand; switching a term off reproduces the arithmetic without it bit for bit (gate Gt). `terms = :homogeneous`
-with `consistent_fm = true` reproduces `consistent_fm = false` bit for bit (Gt7). What each term is worth on a
-fireball: example 06.
+Naming a switch in a sector that is off, or misspelling one, is an error. Changes from a preset or an
+ingredient in an off sector are ignored. Switching a term off reproduces the arithmetic without it
+bit for bit (gate Gt). `terms = :homogeneous` with `consistent_fm = true` reproduces
+`consistent_fm = false` bit for bit (Gt7). Example 06 shows what each term does on a fireball.
 
-**The medium's vorticity coupling** (`shear_vorticity`, added 2026-09-11) is the medium twin of `m2_vorticity`:
-the same function, `vorticity_coupling_2d`, with τ_π for τ_M — the antisymmetric half of the kinematic
-contraction the Boltzmann streaming term produces, with a fixed coefficient (DNMR's $+2\tau_\pi\pi_\lambda^{\langle\mu}\omega^{\nu\rangle\lambda}$).
-Gt8: inert on a round fireball (to the O(h²) vorticity a Cartesian stencil manufactures), acts on a swirling
-one (795× more), and only rotates π ($\pi_{\mu\nu}X^{\mu\nu} = 0$ to 5e-15). Fluidum does not carry it; off by default.
+**The medium's vorticity coupling** `shear_vorticity` is the medium version of `m2_vorticity`: the
+same function, `vorticity_coupling_2d`, with τ_π for τ_M (DNMR's
+$+2\tau_\pi\pi_\lambda^{\langle\mu}\omega^{\nu\rangle\lambda}$). Gt8: inert on a round fireball, acts
+on a swirling one (795× more), and only rotates π ($\pi_{\mu\nu}X^{\mu\nu} = 0$ to 5e-15). Fluidum
+does not carry it. Off by default.
 
 ---
 
 ## 4. Examples
 
 ```sh
-julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/06_charm_terms.jl
+julia -t auto --project=. examples2d/06_charm_terms.jl
 ```
 
 | | what it shows | time |
@@ -198,85 +187,75 @@ julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/examples2d/06_char
 | 04 a fluctuating event | v₃ from lumps, event by event, about the participant plane | 1.7 min |
 | 05 the dissipative sectors | what each sector changes and costs, how big \|π\|/P gets, whether the regulators are inert | 1.2 min |
 | 06 the charm terms | `show_equations`, then every closure term removed one at a time and what it moves | 18 s |
-| 07 a real event | one un-averaged MC-Glauber Pb+Pb event to freeze-out, raw vs smoothed (`smooth_fm`); **animations** | 40 s |
-| 08 vorticity on vs off | `m2_vorticity` measured on that event: \|ω\|/\|σ\|, and what it moves in π_Q; **animation**. `EX08_N=480`/`640` render it at 3×/4×, and the answer **converges** (median 3.01e-2 → 2.84e-2 → 2.79e-2) | 30 s |
-| 09 Gubser flow | the solver against an exact solution, and the convergence order; **animation** | 1.5 min |
-| 10 the showcase | one real Pb+Pb event, every sector on and `m2_vorticity = true`, run long at high resolution and rendered for a slide rather than for a table; **animation**. `EX10_N`/`EX10_TAUF`/`EX10_NFRAME` override the defaults | 72 s |
-| 11 the swirl showcase | 50 hot spots + a rigid-body swirl, every sector on, τ → 12 fm/c; the \|ω\|/\|σ\| panel starts near-black and builds vortex sheets as the swirl decays. ⚠ a picture, not a measurement | 2.5 min |
+| 07 a real event | one MC-Glauber Pb+Pb event to freeze-out, raw vs smoothed (`smooth_fm`); animations | 40 s |
+| 08 vorticity on vs off | `m2_vorticity` on that event: \|ω\|/\|σ\| and what it moves in π_Q; animation. `EX08_N=480`/`640` render it at 3×/4× (median 3.01e-2 → 2.84e-2 → 2.79e-2) | 30 s |
+| 09 Gubser flow | the solver against an exact solution, and the convergence order; animation | 1.5 min |
+| 10 the showcase | one Pb+Pb event, every sector on and `m2_vorticity = true`, long run at high resolution; animation. `EX10_N`/`EX10_TAUF`/`EX10_NFRAME` override the defaults | 72 s |
+| 11 the swirl showcase | 50 hot spots + a rigid-body swirl, every sector on, τ → 12 fm/c | 2.5 min |
+
+Times are from the suite baseline (2026-09-11; example 10 from 2026-09-14, 11 from 2026-09-15). All
+**14/14** FiVo examples, the three 1+1D ones included, passed on 2026-09-14.
 
 ### The figures they produce
 
-Each example writes the figure below it into `examples2d/figures/`. Captions in
-[`examples2d/README.md`](examples2d/README.md); the traps each one is guarding against are in the
-comments of the script itself.
+Each example writes its figure into `examples2d/figures/`. Longer captions are in
+[`examples2d/README.md`](examples2d/README.md).
 
 ![the first run](examples2d/figures/ex01_bjorken.png)
 ![elliptic flow](examples2d/figures/ex02_elliptic_flow.png)
 
-<sub>**01** the whole API on a transversely uniform state, which must integrate the 0+1D DNMR
-equations — and why the agreement is 1e-3 rather than 1e-13. **02** ε₂ → momentum anisotropy, run
-sector by sector from **one** initial condition so the difference is the sector and not the IC, with
-the ε₂ = 0 control that must return identically zero (it returns −2.7e-15).</sub>
+<sub>**01** the whole API on a transversely uniform state, against the 0+1D DNMR equations.
+**02** ε₂ → momentum anisotropy, sector by sector from one initial condition, with the ε₂ = 0
+control (−2.7e-15).</sub>
 
 ![choosing a resolution](examples2d/figures/ex03_convergence.png)
 ![the dissipative sectors](examples2d/figures/ex05_sectors.png)
 
-<sub>**03** a three-grid Richardson study: a field, an observable and a conserved quantity converge
-at three different rates, so "what resolution do I need" has no single answer. **05** what each
-dissipative sector changes and costs, how large \|π\|/P gets, and whether the regulators are inert.</sub>
+<sub>**03** a three-grid Richardson study of a field, an observable and a conserved quantity.
+**05** what each dissipative sector changes and costs, how large \|π\|/P gets, and whether the
+regulators are inert.</sub>
 
 ![a fluctuating event](examples2d/figures/ex04_fluctuating_event.png)
 ![the charm terms](examples2d/figures/ex06_charm_terms.png)
 
-<sub>**04** v₃ from lumps, event by event, and about the **participant plane** rather than the grid
-axes — averaging the initial conditions first destroys the signal, which is why it needs one event
-at a time. **06** every charm closure term removed one at a time, and what each one moves.</sub>
+<sub>**04** v₃ from lumps, event by event, about the participant plane. **06** every charm closure
+term removed one at a time, and what each one moves.</sub>
 
 ![a real event](examples2d/figures/ex07_real_event.png)
 ![vorticity on vs off](examples2d/figures/ex08_vorticity_N640.png)
 
-<sub>**07** one un-averaged MC-Glauber Pb+Pb event to freeze-out, raw against lightly smoothed.
-**08** `m2_vorticity` measured rather than assumed. ⚠ the render shown is **N = 640**
-(`EX08_N=640`, ~12 min), not the N = 160 default — the filaments are the point and they need the
-grid. The answer converges either way: median \|ω\|/\|σ\| 3.01e-2 → 2.84e-2 → 2.79e-2 over
-N = 160/480/640.</sub>
+<sub>**07** one MC-Glauber Pb+Pb event to freeze-out, raw and lightly smoothed. **08** `m2_vorticity`
+on vs off, rendered at N = 640 (`EX08_N=640`, ~12 min). Median \|ω\|/\|σ\| 3.01e-2 → 2.84e-2 →
+2.79e-2 over N = 160/480/640.</sub>
 
 ![Gubser flow](examples2d/figures/ex09_gubser.png)
 
-<sub>**09** the one 2-D problem with an exact answer: the solver beside the closed form, and the
-convergence order that turns "looks right" into a number. The gate G1 ladder measures T 1.90–1.96 and u 2.01–2.07 at N = 100/200/400; the example runs its own ladder and prints its own.</sub>
+<sub>**09** Gubser flow against the exact solution, and the convergence order. Gate G1 measures T
+1.90–1.96 and u 2.01–2.07 at N = 100/200/400.</sub>
 
 ![the showcase](examples2d/figures/ex10_showcase_N400.png)
 
-<sub>**10** the same solver with nothing switched off, run long and fine, drawn for the eye rather
-than for a table. ⚠ at `c_M = 0` the charm second moment is **passive**: `m2_vorticity = true` moves
-π_Q and **nothing else** — T, u^i and ν^i are bit-identical. Read the charm-stress panel, not the
-fireball ones.</sub>
-
-Times are the suite baseline (`Julia/Projects/suite_baseline.toml`), re-recorded 2026-09-11 after the
-performance pass (10 on 2026-09-14; 11 added 2026-09-15) — the first ten together are 591 s. All pass: **14/14
-FiVo examples on 2026-09-14**, the three 1+1D ones included. The suite runs them all with
-`julia --project=Julia Julia/Projects/run_suite.jl examples --only FiVoHydro`.
+<sub>**10** one Pb+Pb event with every sector on, run long at high resolution.</sub>
 
 ---
 
-## 5. Validation
+## 5. Tests
 
 ```sh
-julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run2d_gates.jl           # 22 gates, ~30 min (22/22 on 2026-09-15)
-FIVO2D_TIER=fast julia -t auto --project=Julia/FiVoHydro.jl Julia/FiVoHydro.jl/test/run2d_gates.jl   # 6 gates, ~30 s, in CI
+julia -t auto --project=. test/run2d_gates.jl                     # 22 gates, ~30 min (22/22 on 2026-09-15)
+FIVO2D_TIER=fast julia -t auto --project=. test/run2d_gates.jl    # 6 gates, ~30 s, in CI
 ```
 
-Each gate runs in its own process; the runner exits 1 on any failure, and a gate file that has gone
-missing counts as a failure. Run the full ladder after touching `src2d/` or `main2D.jl`.
+Each gate runs in its own process. The runner exits 1 on any failure, including a missing gate
+file. Run the full ladder after changing `src2d/` or `main2D.jl`.
 
-| gate | file | checks against |
+| gate | file | tested against |
 |---|---|---|
 | shear algebra | `test_shear2d_algebra.jl` | orthogonality/trace identities, an independent closure |
 | recovery | `test_primrec2d.jl`, `test_primrec2d_vs_1d.jl` | round trips; the 1-D recovery on the production locus |
-| **Gc** first moment | `test_consistent_fm2d.jl` | the 1-D source bit for bit; rotation; Bjorken; **Gc7: the sign, on a solve** |
+| **Gc** first moment | `test_consistent_fm2d.jl` | the 1-D source bit for bit; rotation; Bjorken; Gc7: the sign on a solve |
 | **Gm** second moment | `test_consistent_m22d.jl` | the 1-D reduction (4e-16, with the moving projection); rotation; trace; Bjorken |
-| **Gd** DNMR couplings | `test_dnmr2d.jl` | the 0+1D DNMR ODEs (Richardson-extrapolated), wrong-sign referees, the 1-D solver, and the π·σ contractions vs brute force |
+| **Gd** DNMR couplings | `test_dnmr2d.jl` | the 0+1D DNMR ODEs (Richardson-extrapolated), wrong-sign versions, the 1-D solver, and the π·σ contractions vs brute force |
 | **Gt** term switches | `test_terms2d.jl` | every switch wired and additive; the vorticity coupling vs brute-force index algebra; Gt7 presets/`without` and `:homogeneous` ≡ shipped on a solve; Gt8 the medium vorticity coupling |
 | G0, G0b | `test_bjorken2d.jl`, `test_bjorken_bulk2d.jl` | Bjorken, ideal and viscous (order 2.00) |
 | G1, G1v | `test_gubser2d.jl`, `test_gubser_viscous2d.jl` | Gubser flow, analytic and semi-analytic (order 1.96) |
@@ -285,47 +264,34 @@ missing counts as a failure. Run the full ladder after touching `src2d/` or `mai
 | G4, G7 | `test_reproduction2d.jl`, `test_dissipative_vs_1d.jl` | the 1-D production run from the production IC |
 | G5, G6, G8, G9 | `test_production_allsectors2d.jl`, `test_elliptic2d.jl`, `test_unaveraged_ic2d.jl`, `test_fluctuating_ic2d.jl` | all sectors to late times; deformed, un-averaged and single-event ICs |
 
-### What the ladder measures
+### What the gates measure
 
-Not "22 green ticks" — these are the numbers the gates print, from the run of **2026-09-15**. The
-full log is what `run2d_gates.jl` writes; this is the part worth quoting.
+From the run of 2026-09-15:
 
 | | measured |
 |---|---|
-| **G0** Bjorken, ideal | order **2.00** (SSPRK2) and **2.99** (SSPRK3); τJ^τ drift, transverse spread and \|u\| all **identically zero** — a uniform state must stay uniform |
+| **G0** Bjorken, ideal | order **2.00** (SSPRK2) and **2.99** (SSPRK3); τJ^τ drift, transverse spread and \|u\| all identically zero |
 | **G0b** Bjorken + nonlinear bulk | T to 1e-4 and Π to 7.5e-3 against the 0+1D system at ζ/s = 0.05, 0.15, 0.30, i.e. up to \|Π\|/P = 0.60 |
-| **G1** Gubser, exact | L2(T) 3.29e-3 → 8.81e-4 → 2.26e-4 and L2(u) 7.73e-3 → 1.92e-3 → 4.57e-4 at N = 100/200/400 — order **T 1.90, 1.96 · u 2.01, 2.07**. x↔y symmetry at 1e-14, and the entropy outflow is resolution-independent (−0.116) while the error against the analytic answer falls 1.28e-3 → 9.56e-5 |
-| **G1v** Gubser, viscous | the semi-analytic ODE reduces to the code's own analytic ideal Gubser at η/s = 0 to **3.6e-11** |
-| **G2** shear + bulk | the projected NS target to **2.4e-15**; the 2-D and 1-D π^{yy}/π^{η} forms agree exactly; order **1.05** (first order, the split) |
-| **G3** charge | charge drift on a closed domain **1.9e-15** (the conservation test); **0 of 2104** cells carry an up-gradient ν^x; x↔y asymmetry exactly zero |
+| **G1** Gubser, exact | L2(T) 3.29e-3 → 8.81e-4 → 2.26e-4 and L2(u) 7.73e-3 → 1.92e-3 → 4.57e-4 at N = 100/200/400, order **T 1.90, 1.96 · u 2.01, 2.07**. x↔y symmetry at 1e-14; the entropy outflow is resolution-independent (−0.116) while the error against the analytic answer falls 1.28e-3 → 9.56e-5 |
+| **G1v** Gubser, viscous | the semi-analytic ODE reduces to the analytic ideal Gubser at η/s = 0 to **3.6e-11** |
+| **G2** shear + bulk | the projected NS target to **2.4e-15**; the 2-D and 1-D π^{yy}/π^{η} forms agree exactly; order **1.05** |
+| **G3** charge | charge drift on a closed domain **1.9e-15**; **0 of 2104** cells carry an up-gradient ν^x; x↔y asymmetry exactly zero |
 | **G3g** charge on Gubser | core invariant order **1.97**, L2(n) order **2.05** |
-| **Gk** dispersion | τ_n matches the bare moment ratio D_s z K₃/K₂ to **1.0000** at four temperatures, and the measured propagating/overdamped transition brackets the predicted k* = 0.733 1/fm |
-| **Gc** first moment | the 1-D source reproduced **bit for bit** (rel 0.00e+00 at four of five probes, 2.5e-16 at the fifth); the derived sign tracks the ODE to 7.3e-4 while the **flipped sign misses by 5.3e-1** — the control that makes it a measurement |
+| **Gk** dispersion | τ_n matches the bare moment ratio D_s z K₃/K₂ to **1.0000** at four temperatures; the measured propagating/overdamped transition brackets the predicted k* = 0.733 1/fm |
+| **Gc** first moment | the 1-D source reproduced bit for bit (rel 0.00e+00 at four of five probes, 2.5e-16 at the fifth); the derived sign tracks the ODE to 7.3e-4, the flipped sign misses by 5.3e-1 |
 | **Gm** second moment | the 1-D reduction to **4.0e-16**, rotation to 7.8e-16 |
-| **Gd** DNMR couplings | each of δ_ππ, δ_ΠΠ, λ_πΠ, λ_Ππ Richardson-extrapolated to ≤3e-4 at order **0.97–0.99**, each with a **wrong-sign referee that misses** by 5e-3 to 1.7 |
-| **Gt** term switches | 18 terms registered; Σ(per-term pieces) vs the whole source **1.4e-15** over 40 states; the vorticity piece is **exactly zero** in the axisymmetric limit and matches brute-force index algebra to 1.1e-14 |
+| **Gd** DNMR couplings | each of δ_ππ, δ_ΠΠ, λ_πΠ, λ_Ππ Richardson-extrapolated to ≤3e-4 at order **0.97–0.99**; wrong-sign versions miss by 5e-3 to 1.7 |
+| **Gt** term switches | 18 terms registered; Σ(per-term pieces) vs the whole source **1.4e-15** over 40 states; the vorticity piece is exactly zero in the axisymmetric limit and matches brute-force index algebra to 1.1e-14 |
 | **Gs** sound | c_s to **0.05 %** of the exact value |
 | **G4/G7** vs the 1-D solver | L2(T) 1.18e-3 → 6.31e-4, order **0.90** in dx; sector by sector and ring by ring in G7 |
 | **G5/G6/G8/G9** production ICs | the ε₂ = 0 control returns anisotropy **−2.7e-15**; ε₂ = 0.25 gives 0.20786 → 0.20798 over N = 150 → 300 (**0.06 %**); single-event v₃ converges to 0.92 % and is **9.5×** the ensemble value; the regulators move v₂ by 0.05 % of signal |
 
-⚠ **G2's order is 1.05, not 2** — that is the operator split, not a defect, and it is the single most
-important number on this page. Every dissipative sector is first order in Δτ. The ideal sector
-(G0, G1) is second order.
+G2's order is 1.05 because of the operator split: every dissipative sector is first order in Δτ. The
+ideal sector (G0, G1) is second order.
 
-The 2-D leg of two more gates lives in the 1-D ladder, because each judges all three solvers with one
-referee: **X1** (`test/test_diffusion_mode.jl`, the radial diffusion mode) and **IO**
-(`test/test_fields_io.jl`, `save_fields`/`load_fields` round-trip — `fields_2d` included).
-
-Outside this package, in `Julia/Projects/FiVoFluidumComparison/`:
-
-| | |
-|---|---|
-| `gate_2p1d_viscous.jl` | medium viscous rows vs a referee that is neither code (1e-11); commit-level in `programme.jl check` |
-| `gate_transverse_fm.jl` | the transverse first moment vs a closed form with real transverse structure, supplied by neither code, **both codes**. FiVo converges to it: 1.05 → 0.53 → 0.43 % at N = 32/48/64, worst single cell 0.8 %, `cos` = 1.000000 at every resolution; commit-level |
-| `gate_2p1d_m2.jl` | second-moment rows, FiVo vs Fluidum at identical states |
-| `test/test_diffusion_mode.jl` (X1, the 1-D ladder) | the charm current on a radial diffusion mode: **this solver, the 1-D bulk solver and the 1-D IS2 solver** against one closed-form referee, four term configurations |
-| `COMPARISON_2P1D.md` | the solve-vs-solve record (a real Pb+Pb event to freeze-out, §37) |
-| `compare_examples_1p1d.jl`, `COMPARISON_1P1D.md` | the **1+1D** medium against Fluidum on the worked-example configurations — 15/15, and the first such comparison of that sector |
+Two more gates cover this solver but sit in the 1-D ladder: **X1** (`test/test_diffusion_mode.jl`,
+the radial diffusion mode through all three solvers) and **IO** (`test/test_fields_io.jl`,
+`save_fields`/`load_fields`, `fields_2d` included). The cross-checks with Fluidum are in `README.md`.
 
 ---
 
@@ -341,47 +307,14 @@ $\tau = 0.4 \to 4$, all medium sectors on:
 | ″ | 200 | 628 |
 | ″ | 300 | **582** |
 
-At N = 200, best of three, as a percentage over the ideal scheme (468 ns/cell-step): shear +27 %,
-bulk +19 %, diffusion +16 %, all three +35 %, `consistent_fm` +51 %, `+ consistent_m2` +126 %. The
-second moment's share is its five source evaluations per cell per step — one for the rate, one per
-channel to measure the implicit coefficient. The per-cell cost falls with N because thread
-utilisation improves. Projected: N = 400 to τ = 13 in ~1.3 min, N = 800 in ~11 min.
+At N = 200, best of three, relative to the ideal scheme (468 ns/cell-step): shear +27 %, bulk
++19 %, diffusion +16 %, all three +35 %, `consistent_fm` +51 %, `+ consistent_m2` +126 %. The
+second moment costs five source evaluations per cell per step. The per-cell cost falls with N
+because thread utilisation improves. Projected: N = 400 to τ = 13 in ~1.3 min, N = 800 in ~11 min.
 
-**Measured 2026-09-11 after the performance pass** (`TWOD_PROGRAM.md` §6ai), which made the solver
-**3.4× faster** — 60 % of its runtime had been a single Bessel function inside the equation of
-state. On the same machine the earlier code gave 1880 ns/cell-step at N = 300 against 582 now.
-The benchmark does a warm-up run first (without it the first row carries the solver's compilation
-and reads 6× high) and takes the best of three for the per-sector rows (with one repetition that
-section reported diffusion as *cheaper* than ideal).
+At 4 threads (2026-09-14): 2641 → 2010 ns/cell-step from N = 100 to N = 300, about 3.5× the
+16-thread numbers. The per-sector percentages are similar: shear +30.0 %, bulk +21.3 %, diffusion
++18.9 %, all three +33.7 %, `consistent_fm` +55.3 %, `+ consistent_m2` +140.7 %.
 
-**Re-measured 2026-09-14 at 4 threads** (what `run_suite.jl bench` records, 269 s): 2641 → 2010 ns/cell-step from
-N = 100 to N = 300, i.e. ~3.5× the 16-thread numbers above, and the per-sector percentages reproduce within a few
-points — shear +30.0 %, bulk +21.3 %, diffusion +18.9 %, all three +33.7 %, `consistent_fm` +55.3 %,
-`+ consistent_m2` +140.7 %. Quote the thread count with any of these numbers.
-
-Which step limit binds depends on the box and the $\tau$ range. The step count tracks $N$ when the
-transverse CFL binds (cost ~$N^3$) and stays flat when the Bjorken clock `CFLτ` does (cost ~$N^2$).
-A lumpy event that goes unphysical is *slower* (MOOD retries): wall time per step is an early
-warning.
-
----
-
-## 7. Known limitations — read before quoting a number
-
-| | |
-|---|---|
-| **2-D `consistent_fm` results before 2026-09-10 are wrong** | every consistent term had the wrong sign (EQUATIONS2D §10) |
-| the charm second moment lacked its projector term before 2026-09-10 | 0.02–0.6 % of the rate; `terms = (m2_projector = false,)` reproduces the old rows. Fluidum's twin lacked it too until 2026-09-11, when both the projector (default ON) and the vorticity coupling (default OFF) were derived and added to `Fluidum.jl/src/Matrix/HQ_2p1d_BG_m2.jl`; the two codes now agree on genuinely 2-D states (`FiVoFluidumComparison/gate_2p1d_m2_newterms.jl`) |
-| the vorticity couplings are off by default | `m2_vorticity`: up to 12 % of the σ coupling in the worst cells of a lumpy event; neither code carried it before. `shear_vorticity` (the medium's, 2026-09-11): not carried by Fluidum |
-| the medium's DNMR couplings τ_ππ, λ_πΠ, δ_ΠΠ, λ_Ππ | default 0; wired since 2026-09-11 with the 1+1D solver's equations and signs (gate Gd). Only δ_ππ is set by the production callers |
-| first order in time once anything dissipative is on | the operator split; halve `CFLτ` to check |
-| the dilute edge | the vacuum ramp throttles the charge sector below $n = 2\cdot10^{-3}$ fm⁻³, which reaches above $T_{\rm fo}$; quote dissipative fields from $T > T_{\rm fo}$ only |
-| no diffusive signal speed in the CFL | `wavespeeds_2d` bounds the HLLE fan by the sound speed. COMPARISON_2P1D §28 measured `\|ν\|/n` climbing to 0.93 at the edge with `consistent_fm` on — but under the wrong sign, whose expansion term anti-damped the current. Not re-measured since the fix |
-| `consistent_fm` defaults differ **between the codes** | `build_model_2d` defaults to **false**; Fluidum's 2-D second-moment driver `matrix2d_HQ_BG_m2!` defaults `consistent_fm` to **true**, and its other two 2-D charm drivers (`matrix2d_HQ_BG!`, `matrix2d_visc_HQ_BG!`) carry the shipped ∇α row with no switch at all. Set it explicitly on both sides |
-| `deltaShear_factor` differs between the two 1-D **entry points** | `build_model_1d` and `build_model_2d` both default to 4/3; the legacy `run_sim_ideal_diff_visc` defaults to 0 (production passes 4/3). Set it explicitly in any comparison |
-| `transport_mass` is only partly decoupled | $\tau_n$, $h$, $h'$ still use the EoS mass |
-| no thermal fluctuations, no $c_M$ back-coupling | not implemented |
-| the 2-D charm density is not bit-identical to `eos_Pne` | since 2026-09-11 the 2-D EOS uses a fast $K_2$ (19× faster, agreeing to 1.6e-15). Fields move ≤ 4e-14 absolute on a solve; P and e are bit-identical, and `src/eos.jl` (the 1-D production path) is untouched |
-
-The full list of what was found and fixed, with measurements: `TWOD_PROGRAM.md` (D1–D16, §6) and
-`EQUATIONS2D.md` §10.
+The step count tracks $N$ when the transverse CFL binds (cost ~$N^3$) and stays flat when the
+Bjorken clock `CFLτ` does (cost ~$N^2$). A lumpy event that goes unphysical is slower (MOOD retries).

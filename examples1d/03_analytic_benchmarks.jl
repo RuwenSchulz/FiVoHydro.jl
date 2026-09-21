@@ -98,7 +98,7 @@ function panel_c()
     # POINT at every resolution — it chases the axis as the grid refines, and no sequence of such
     # points measures convergence. The inset does the honest test at a FIXED radius.
     # 🔑 The first cell used to sit visibly off the curve here, and that WAS a real defect, repaired
-    # 2026-09-15 (README §8, EQUATIONS1D §10b): three places treated the cell as if it were AT r = 0
+    # 2026-09-15 (EQUATIONS1D §10b): three places treated the cell as if it were AT r = 0
     # — apply_bc! zeroed its conserved S_r, rhs! zeroed its u^r, and the axis face ran first order —
     # while u^r(dr/2) = dr/2 exactly on Gubser. Repairing all three took L2(T) at Nr = 800 from
     # 2.614e-04 to 2.780e-05 and the order in T from 1.77 to 2.12. `FIVO_AXIS_CELL_EXACT=0` puts the
