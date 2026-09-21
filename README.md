@@ -104,7 +104,7 @@ Figure provenance: [`docs/figures/README.md`](docs/figures/README.md).
 ## Worked examples
 
 Fourteen examples, three 1+1D and eleven 2+1D. Each takes seconds to minutes and makes the figure
-next to it. They are meant to be copied and edited.
+next to it.
 
 | | |
 |---|---|
