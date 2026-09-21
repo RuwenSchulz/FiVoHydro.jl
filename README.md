@@ -17,8 +17,8 @@ There are three solvers. They share one term interface, one test suite and one o
 
 The bulk solvers (1+1D and 2+1D) are conservative finite volume: HLLE fluxes, MUSCL reconstruction
 (MC limiter) in primitive variables, SSPRK2/3 in time, operator-split relaxation of the dissipative
-fields and a MOOD fallback. The charm IS2 equations have no conservative form. That solver uses the
-quasi-linear form $A_t\,\partial_\tau U + A_x\,\partial_r U = S$ with RK4, and the characteristic
+fields and a MOOD fallback. The charm relaxation equations have no conservative form. The IS2 solver
+uses the quasi-linear form $A_t\,\partial_\tau U + A_x\,\partial_r U = S$ with RK4, and the characteristic
 speeds are the eigenvalues of $A_t^{-1}A_x$. The charm charge itself is still updated conservatively.
 
 ![a real Pb+Pb event](examples2d/figures/ex10_showcase_N400.png)
