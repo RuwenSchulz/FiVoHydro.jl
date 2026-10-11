@@ -1855,6 +1855,19 @@ FiVo path floors far below T_fo. So my axisymmetric "control" was never the same
 the calibration. **A 2-D re-derivation of `Norm` would legitimately differ**, and the size of that
 difference is the ~12% above, not 19%.
 
+🔴 **2026-09-26 (CharmVsData): the single-valued surface itself loses 13–25 %, and it is wrong for flow.** `pion_yield`
+integrates over τ_fo(x, y), the last downward crossing per cell. That surface cannot represent the isotherm where it
+turns over in τ (the rim, and cells the expanding core re-heats). Cooper–Frye through the WHOLE isotherm, by the coarea
+formula dΣ_μ = −∂_μT δ(T − T_fo) τ d³x on the stored (τ, x, y) grid (`Projects/CharmVsData/bulk2d_flow.jl`, converged in
+the δ's width), on CharmVsData's 2+1D Pb+Pb bulks (this solver, `deltaShear_factor = 0`, no charge, the IC of
+`build_ic2d_cent.jl`):
+- yield, whole isotherm / single-valued: 1.1345 in 0–5 %, 1.2076 in 0–10 %, 1.2496 in 30–50 % — class-dependent, so
+  single-valued RATIOS between classes are biased too;
+- the 0–5 % whole-isotherm yield is **1339.19** (Boltzmann), the 1-D calibration's 1339.63 to 0.03 % — evidence that the
+  ~12 % above is mostly this surface, not the setup (not proof: that IC is the aligned event average, not the 1-D profile);
+- the thermal π v₂ at 1 GeV in 30–50 % is 0.058 on the single-valued surface and 0.148 through the whole isotherm (ALICE
+  0.143): the single-valued rim puts 9 % of the pions at v₂ ≈ −0.4. Do not read flow off `pion_yield`'s surface.
+
 ⚠ **A τ-sampling bias remains in the absolute yield.** Refining dτ from 0.05 to 0.02 at N = 300
 moves the yield 1183.9 → 1172.9 (−0.9%): a cell is recorded as frozen at the first *sampled* τ below
 T_fo, so coarse sampling places the surface systematically late. The comparison above is at matched
