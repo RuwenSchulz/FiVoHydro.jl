@@ -353,7 +353,55 @@ function _cons_to_prim_ideal_phi0_y0_nocharge!(w::PrimRecWork,
     return (T, μ, 0.0, 0.0, max(e, 0.0), P, conv)
 end
 
+"""
+    cons_to_prim_ideal_phi0_nocharge!(w, Sr, E, Pi, piR, piEta, r, τ, eos; yT0, y0, maxit, tol, tol_res)
+
+Primitive recovery for an EOS without charge dependence: a 2-variable Newton in (yT, y) with φ = 0.
+
+🔴 2026-10-18. Two defects, found by the FiVo–Fluidum benchmark (Projects/FiVoFluidumBench, `sound_1d`
+with `RunningConformalHQEOS(g_hq = 0)`): a cell failed once and then FAILED FOREVER, its T reset to T_MIN —
+74 / 852 failures at Nr = 100 / 400 on a 10⁻³ sound mode, each a spike δT/T = −1.
+  1. The trigger: a CONVERGED root rejected by the final residual test at round-off level (measured:
+     residual 4.648e-13 against a threshold 4.617e-13 = 1e-14 (1 + |Sr| + |E|), T and u^r exact to all
+     digits; about 1 in 20 000 poor warm starts). One more Newton step takes it to 2.8e-14.
+  2. The persistence: the failed cell's cached guess becomes yT = log(T_MIN), and unlike the charged
+     3-variable path (`cons_to_prim_ideal_phi_diff_visc!`, "If we previously failed and fell back to
+     vacuum…") this path had no guard, so every later recovery started from vacuum and failed: 144 / 144.
+The fix only changes outcomes that FAILED: a vacuum cache is discarded for a non-vacuum state, and a failed
+attempt is retried — first polished from where it stopped, then from the cold guess. Every recovery that
+succeeds on its first attempt is bit-for-bit what it was — the retry the 2-D recovery already had
+(`cons_to_prim_2d!`, src2d/primrec2d.jl). Conformal charge-free EOSs (ideal) take the exact
+inversion and never reach this function; the production EOS carries charge and never reaches it either.
+"""
 function cons_to_prim_ideal_phi0_nocharge!(w::PrimRecWork,
+                                          Sr::Float64, E::Float64,
+                                          Pi_phys::Float64, piR_phys::Float64, piEta_phys::Float64,
+                                          r::Float64, τ::Float64,
+                                          eos;
+                                          yT0::Float64=NaN, y0::Float64=NaN,
+                                          maxit::Int=80, tol::Float64=1e-15, tol_res::Float64=1e-14)
+    if isfinite(yT0) && yT0 <= log(T_MIN) + 1e-12 && E > 1e6 * E_VAC      # (2) a vacuum cache
+        yT0 = NaN; y0 = NaN
+    end
+    res = _cons_to_prim_ideal_phi0_nocharge_once!(w, Sr, E, Pi_phys, piR_phys, piEta_phys, r, τ, eos;
+                                                  yT0, y0, maxit, tol, tol_res)
+    res[7] && return res
+    # (1) polish from where the attempt stopped, if it stopped at a physical temperature …
+    if res[1] > 10 * T_MIN
+        res2 = _cons_to_prim_ideal_phi0_nocharge_once!(w, Sr, E, Pi_phys, piR_phys, piEta_phys, r, τ, eos;
+                                                       yT0 = log(res[1]), y0 = asinh(res[3]), maxit, tol, tol_res)
+        res2[7] && return res2
+    end
+    # … then from the cold guess, unless that is where the first attempt already started
+    if isfinite(yT0)
+        res3 = _cons_to_prim_ideal_phi0_nocharge_once!(w, Sr, E, Pi_phys, piR_phys, piEta_phys, r, τ, eos;
+                                                       maxit, tol, tol_res)
+        res3[7] && return res3
+    end
+    return res
+end
+
+function _cons_to_prim_ideal_phi0_nocharge_once!(w::PrimRecWork,
                                           Sr::Float64, E::Float64,
                                           Pi_phys::Float64, piR_phys::Float64, piEta_phys::Float64,
                                           r::Float64, τ::Float64,

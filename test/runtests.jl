@@ -177,6 +177,35 @@ end
         @test isfinite(wpr.last_iters)
     end
 
+    @testset "Primitive recovery, charge-free non-conformal EOS near rest" begin
+        # 2026-10-18 (src/primrec.jl, cons_to_prim_ideal_phi0_nocharge!): a converged root rejected at
+        # round-off, then a vacuum cache that was never discarded — one cell failed for the rest of a run.
+        eos = hydro.RunningConformalHQEOS(g_eff = 47.5, δ = 0.5, T0 = 0.15, m_hq = 0.0, g_hq = 0.0)
+        w = hydro.PrimRecWork()
+        function cons(T, ur)
+            P, _, e = hydro.eos_Pne(T, 0.0, eos); ut = sqrt(1 + ur^2)
+            return ((e + P)*ut*ur, (e + P)*ut^2 - P)
+        end
+        recover(Sr, E; kw...) = hydro.cons_to_prim_ideal_phi_diff_visc!(w, 0.0, Sr, E, 0.0, 0.0, 0.0, 0.0,
+                                                                        1.0, 1.0, eos; kw...)
+        exact(r, T, ur) = r[7] && abs(r[1]/T - 1) < 1e-10 && abs(r[3] - ur) < 1e-10
+        # the measured trigger: this warm start used to end in PRR_RESIDUAL_TOO_LARGE at the exact root
+        T = 0.38361213616913753; ur = 4.3270160730523765e-7
+        @test exact(recover(cons(T, ur)...; yT0 = -0.9435672047992876, φ0 = 0.0, y0 = 0.1296242939551828), T, ur)
+        # a vacuum cache (what a failed cell leaves behind) must not stick
+        @test all(exact(recover(cons(T, s*10.0^k)...; yT0 = log(hydro.T_MIN), φ0 = 0.0, y0 = 0.0), T, s*10.0^k)
+                  for T in (0.2, 0.3, 0.4), k in -9:-4, s in (-1, 1))
+        # poor warm starts: T off by up to ×2, y off by up to ±0.2
+        nbad = 0
+        for i in 1:2000
+            T = 0.18 + 0.22*((i*0.6180339887) % 1); ur = (isodd(i) ? -1 : 1)*10.0^(-9 + 6*((i*0.7548776662) % 1))
+            r = recover(cons(T, ur)...; yT0 = log(T) + log(2)*(2*((i*0.5698402910) % 1) - 1), φ0 = 0.0,
+                        y0 = 0.2*(2*((i*0.4142135624) % 1) - 1))
+            exact(r, T, ur) || (nbad += 1)
+        end
+        @test nbad == 0
+    end
+
     @testset "Short run does not throw" begin
         mktempdir() do outdir
             hydro.run_sim_ideal_diff_visc(
